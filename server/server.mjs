@@ -16,6 +16,10 @@ const FALLBACK_MODELS = (process.env.LLM_FALLBACK_MODELS || 'openai/gpt-oss-120b
   .filter(Boolean)
 const TAVILY_API_KEY = process.env.TAVILY_API_KEY || ''
 const E2B_API_KEY = process.env.E2B_API_KEY || ''
+const VERCEL_TOKEN = process.env.VERCEL_TOKEN || ''
+const VERCEL_TEAM_ID = process.env.VERCEL_TEAM_ID || ''
+const VERCEL_PROJECT_ID = process.env.VERCEL_PROJECT_ID || ''
+const VERCEL_SANDBOX_CONFIGURED = Boolean(VERCEL_TOKEN && VERCEL_TEAM_ID && VERCEL_PROJECT_ID)
 const POLLINATIONS_API_KEY = process.env.POLLINATIONS_API_KEY || ''
 const IMAGE_MODEL = process.env.IMAGE_MODEL || 'zimage'
 const ALLOWED_ORIGIN = process.env.ALLOWED_ORIGIN || ''
@@ -325,11 +329,11 @@ const agentTools = [
       parameters: { type: 'object', properties: {}, additionalProperties: false },
     },
   },
-  ...(E2B_API_KEY ? [{
+  ...((E2B_API_KEY || VERCEL_SANDBOX_CONFIGURED) ? [{
     type: 'function',
     function: {
       name: 'execute_code',
-      description: 'Exécuter du code Python, JavaScript, TypeScript ou Bash dans un sandbox E2B isolé. À utiliser pour les calculs, analyses de données, graphiques et programmes.',
+      description: 'Exécuter du code Python, JavaScript, TypeScript ou Bash dans une vraie micro-VM Linux isolée. À utiliser pour les calculs, analyses de données, graphiques, commandes terminal et programmes.',
       parameters: {
         type: 'object',
         properties: {
@@ -368,8 +372,61 @@ function outputLines(values) {
     .slice(0, 20_000)
 }
 
+async function executeVercelCode(args) {
+  const code = String(args.code || '').slice(0, 30_000)
+  const language = ['python', 'javascript', 'typescript', 'bash'].includes(args.language) ? args.language : 'python'
+  if (!code.trim()) return { result: { success: false, error: 'Aucun code à exécuter.' }, artifacts: [] }
+  const runtime = language === 'python' ? 'python3.13' : 'node24'
+  const extension = { python: 'py', javascript: 'js', typescript: 'ts', bash: 'sh' }[language]
+  const interpreter = {
+    python: 'python3 /tmp/wangala.py',
+    javascript: 'node /tmp/wangala.js',
+    typescript: 'node --experimental-strip-types /tmp/wangala.ts',
+    bash: 'bash /tmp/wangala.sh',
+  }[language]
+  let sandbox
+  try {
+    const { Sandbox } = await import('@vercel/sandbox')
+    sandbox = await Sandbox.create({
+      teamId: VERCEL_TEAM_ID,
+      projectId: VERCEL_PROJECT_ID,
+      token: VERCEL_TOKEN,
+      runtime,
+      timeout: 120_000,
+      persistent: false,
+      networkPolicy: 'deny-all',
+    })
+    const encoded = Buffer.from(code).toString('base64')
+    const command = await sandbox.runCommand({
+      cmd: 'bash',
+      args: ['-lc', `printf '%s' '${encoded}' | base64 -d > /tmp/wangala.${extension} && timeout 75s ${interpreter}`],
+    })
+    const stdout = String(await command.stdout()).slice(0, 20_000)
+    const stderr = String(await command.stderr()).slice(0, 20_000)
+    const artifacts = [{
+      id: randomUUID(), type: 'code', name: String(args.title || `Exécution ${language}`).slice(0, 80),
+      language, content: code, output: [stdout, stderr].filter(Boolean).join('\n').slice(0, 30_000), createdAt: Date.now(),
+    }]
+    try {
+      const plot = await sandbox.fs.readFile('/tmp/wangala_plot.png')
+      if (plot?.length && plot.length < 10_000_000) {
+        artifacts.push({ id: randomUUID(), type: 'image', name: 'Graphique généré', mimeType: 'image/png', url: `data:image/png;base64,${Buffer.from(plot).toString('base64')}`, createdAt: Date.now() })
+      }
+    } catch { /* Aucun graphique produit */ }
+    return {
+      result: { success: command.exitCode === 0, provider: 'vercel', language, stdout, stderr, exitCode: command.exitCode, artifactCount: artifacts.length },
+      artifacts,
+    }
+  } catch (error) {
+    return { result: { success: false, error: `La micro-VM Linux n’a pas pu démarrer : ${error?.message || 'erreur inconnue'}`.slice(0, 1_000) }, artifacts: [] }
+  } finally {
+    if (sandbox) await sandbox.stop().catch(() => {})
+  }
+}
+
 async function executeSandboxCode(args) {
-  if (!E2B_API_KEY) return { result: { success: false, error: 'Le workspace E2B n’est pas configuré.' }, artifacts: [] }
+  if (VERCEL_SANDBOX_CONFIGURED) return executeVercelCode(args)
+  if (!E2B_API_KEY) return { result: { success: false, error: 'Aucun fournisseur de workspace Linux n’est configuré.' }, artifacts: [] }
   const code = String(args.code || '').slice(0, 30_000)
   const languageMap = { python: 'python', javascript: 'javascript', typescript: 'ts', bash: 'bash' }
   const language = languageMap[args.language] || 'python'
@@ -667,11 +724,12 @@ const server = createServer(async (request, response) => {
     return sendJson(response, 200, {
       status: 'ok',
       service: 'wangala-ia',
-      release: '0.4.0',
+      release: '0.4.1',
       modelConfigured: Boolean(LLM_API_KEY && LLM_MODEL),
       webSearchConfigured: true,
       searchProvider: TAVILY_API_KEY ? 'tavily' : 'rss',
-      workspaceConfigured: Boolean(E2B_API_KEY),
+      workspaceConfigured: Boolean(E2B_API_KEY || VERCEL_SANDBOX_CONFIGURED),
+      workspaceProvider: VERCEL_SANDBOX_CONFIGURED ? 'vercel-linux' : E2B_API_KEY ? 'e2b' : null,
       imageGenerationConfigured: Boolean(POLLINATIONS_API_KEY),
       videoGenerationConfigured: false,
       automaticFallbacks: FALLBACK_MODELS.length,

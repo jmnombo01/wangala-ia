@@ -16,7 +16,7 @@
 - recherche web légère sans clé supplémentaire pour les questions récentes ;
 - historique compacté, nouvelle tentative automatique et modèles de secours en cas de quota ;
 - workspace local pour le code, les graphiques, les fichiers et les images ;
-- exécution Python, JavaScript, TypeScript et Bash dans un sandbox E2B isolé ;
+- exécution Python, JavaScript, TypeScript et Bash dans une micro-VM Linux Vercel Sandbox (E2B reste compatible en secours) ;
 - génération d’images via Pollinations ;
 - Tavily facultatif comme moteur de recherche supplémentaire ;
 - HTTPS automatique avec Caddy ;
