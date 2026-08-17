@@ -1,0 +1,18 @@
+services:
+  - type: web
+    name: wangala-ia-bf
+    runtime: docker
+    plan: free
+    region: frankfurt
+    dockerfilePath: ./Dockerfile.wangala
+    healthCheckPath: /api/health
+    autoDeploy: true
+    envVars:
+      - key: LLM_API_URL
+        value: https://api.groq.com/openai/v1
+      - key: LLM_MODEL
+        value: llama-3.3-70b-versatile
+      - key: LLM_API_KEY
+        sync: false
+      - key: RATE_LIMIT_PER_MINUTE
+        value: "20"

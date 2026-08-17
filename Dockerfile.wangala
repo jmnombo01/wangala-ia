@@ -1,0 +1,24 @@
+FROM node:20-alpine AS web-build
+WORKDIR /build/frontend
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci
+COPY frontend/ ./
+ARG VITE_CHAT_API_URL=""
+ARG VITE_DEMO_MODE="false"
+ENV VITE_CHAT_API_URL=$VITE_CHAT_API_URL
+ENV VITE_DEMO_MODE=$VITE_DEMO_MODE
+RUN npm run build
+
+FROM node:20-alpine AS runtime
+ENV NODE_ENV=production \
+    HOST=0.0.0.0 \
+    PORT=8787 \
+    STATIC_DIR=/app/public
+WORKDIR /app
+COPY --chown=node:node server/server.mjs ./server.mjs
+COPY --from=web-build --chown=node:node /build/frontend/dist ./public
+USER node
+EXPOSE 8787
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD wget -qO- http://127.0.0.1:8787/api/health || exit 1
+CMD ["node", "server.mjs"]
