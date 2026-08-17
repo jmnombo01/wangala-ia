@@ -47,6 +47,18 @@ node server/server.mjs
 
 Le fournisseur est configurable avec `LLM_API_URL`.
 
+## Déploiement automatique
+
+Le script `scripts/deploy-automatic.sh` peut créer le dépôt GitHub, envoyer le code, créer le service Render Free, configurer Groq et attendre la mise en ligne. Il utilise temporairement `.env.deploy` puis supprime ce fichier à la fin :
+
+```bash
+cp .env.deploy.example .env.deploy
+# Renseigner les trois jetons temporaires
+./scripts/deploy-automatic.sh
+```
+
+Ne publiez jamais `.env.deploy`. Révoquez les jetons temporaires GitHub et Render après le déploiement.
+
 ## Déploiement gratuit
 
 Consultez **[DEPLOIEMENT-GRATUIT.md](./DEPLOIEMENT-GRATUIT.md)**. La formule gratuite recommandée utilise :
