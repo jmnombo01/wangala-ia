@@ -29,9 +29,16 @@ cleanup() {
 }
 trap cleanup EXIT
 
-for variable in GITHUB_TOKEN RENDER_API_KEY GROQ_API_KEY; do
+for variable in GITHUB_TOKEN RENDER_API_KEY; do
   [[ -n "${!variable:-}" ]] || fail "$variable est absent du fichier de secrets."
 done
+
+DEMO_DEPLOYMENT=false
+if [[ -z "${GROQ_API_KEY:-}" ]]; then
+  DEMO_DEPLOYMENT=true
+  export GROQ_API_KEY=""
+  log "Aucune clé Groq : déploiement de l’infrastructure en attente du modèle IA"
+fi
 
 api_json() {
   local method="$1" url="$2" token="$3" body="${4:-}"
@@ -125,6 +132,13 @@ if [[ -z "$SERVICE_ID" ]]; then
   python - "$OWNER_ID" "$REPO_URL" "$SERVICE_NAME" > /tmp/wangala-render-create-$$.json <<'PY'
 import json, os, sys
 owner_id, repo_url, service_name = sys.argv[1:]
+env_vars = [
+  {"key": "LLM_API_URL", "value": "https://api.groq.com/openai/v1"},
+  {"key": "LLM_MODEL", "value": "llama-3.3-70b-versatile"},
+  {"key": "RATE_LIMIT_PER_MINUTE", "value": "20"}
+]
+if os.environ.get("GROQ_API_KEY"):
+  env_vars.append({"key": "LLM_API_KEY", "value": os.environ["GROQ_API_KEY"]})
 print(json.dumps({
   "type": "web_service",
   "name": service_name,
@@ -132,12 +146,7 @@ print(json.dumps({
   "repo": repo_url,
   "branch": "main",
   "autoDeploy": "yes",
-  "envVars": [
-    {"key": "LLM_API_URL", "value": "https://api.groq.com/openai/v1"},
-    {"key": "LLM_MODEL", "value": "llama-3.3-70b-versatile"},
-    {"key": "LLM_API_KEY", "value": os.environ["GROQ_API_KEY"]},
-    {"key": "RATE_LIMIT_PER_MINUTE", "value": "20"}
-  ],
+  "envVars": env_vars,
   "serviceDetails": {
     "runtime": "docker",
     "plan": "free",
@@ -160,12 +169,14 @@ else
   log "Service Render existant détecté ; synchronisation des variables et redéploiement"
   ENV_BODY="$(python - <<'PY'
 import json, os
-print(json.dumps([
+items = [
   {"key": "LLM_API_URL", "value": "https://api.groq.com/openai/v1"},
   {"key": "LLM_MODEL", "value": "llama-3.3-70b-versatile"},
-  {"key": "LLM_API_KEY", "value": os.environ["GROQ_API_KEY"]},
   {"key": "RATE_LIMIT_PER_MINUTE", "value": "20"}
-]))
+]
+if os.environ.get("GROQ_API_KEY"):
+  items.append({"key": "LLM_API_KEY", "value": os.environ["GROQ_API_KEY"]})
+print(json.dumps(items))
 PY
 )"
   api_json PUT "$RENDER_API/services/$SERVICE_ID/env-vars" "$RENDER_API_KEY" "$ENV_BODY" >/dev/null
@@ -195,7 +206,9 @@ log "Vérification de l’application"
 for attempt in $(seq 1 18); do
   if HEALTH="$(curl --silent --fail --max-time 20 "$SERVICE_URL/api/health" 2>/dev/null)"; then
     MODEL_READY="$(printf '%s' "$HEALTH" | json_value "str(data.get('modelConfigured', False)).lower()")"
-    [[ "$MODEL_READY" == "true" ]] || fail "L’application répond, mais le modèle n’est pas configuré."
+    if [[ "$DEMO_DEPLOYMENT" != "true" && "$MODEL_READY" != "true" ]]; then
+      fail "L’application répond, mais le modèle n’est pas configuré."
+    fi
     break
   fi
   sleep 10
@@ -207,4 +220,7 @@ printf '\033[1;32m===============================================\033[0m\n'
 printf 'GitHub : %s\n' "$REPO_URL"
 printf 'Site   : %s\n' "$SERVICE_URL"
 printf 'Santé  : %s/api/health\n' "$SERVICE_URL"
+if [[ "$DEMO_DEPLOYMENT" == "true" ]]; then
+  printf '\nAttention : ajoutez LLM_API_KEY dans Render pour activer les réponses Groq.\n'
+fi
 printf '\nLe fichier de secrets local a été supprimé automatiquement.\n'
