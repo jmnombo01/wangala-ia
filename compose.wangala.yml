@@ -12,8 +12,6 @@ services:
       LLM_API_URL: ${LLM_API_URL:-https://api.openai.com/v1}
       LLM_API_KEY: ${LLM_API_KEY:?Renseignez LLM_API_KEY dans .env}
       LLM_MODEL: ${LLM_MODEL:-openai/gpt-oss-20b}
-      SEARCH_MODEL: ${SEARCH_MODEL:-groq/compound-mini}
-      SEARCH_FALLBACK_MODELS: ${SEARCH_FALLBACK_MODELS:-groq/compound}
       LLM_FALLBACK_MODELS: ${LLM_FALLBACK_MODELS:-openai/gpt-oss-120b,qwen/qwen3.6-27b}
       MAX_CONTEXT_CHARS: ${MAX_CONTEXT_CHARS:-14000}
       MAX_OUTPUT_TOKENS: ${MAX_OUTPUT_TOKENS:-1200}

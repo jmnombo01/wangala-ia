@@ -135,8 +135,6 @@ owner_id, repo_url, service_name = sys.argv[1:]
 env_vars = [
   {"key": "LLM_API_URL", "value": "https://api.groq.com/openai/v1"},
   {"key": "LLM_MODEL", "value": "openai/gpt-oss-20b"},
-  {"key": "SEARCH_MODEL", "value": "groq/compound-mini"},
-  {"key": "SEARCH_FALLBACK_MODELS", "value": "groq/compound"},
   {"key": "LLM_FALLBACK_MODELS", "value": "openai/gpt-oss-120b,qwen/qwen3.6-27b"},
   {"key": "MAX_CONTEXT_CHARS", "value": "14000"},
   {"key": "MAX_OUTPUT_TOKENS", "value": "1200"},
@@ -178,8 +176,6 @@ import json, os
 items = [
   {"key": "LLM_API_URL", "value": "https://api.groq.com/openai/v1"},
   {"key": "LLM_MODEL", "value": "openai/gpt-oss-20b"},
-  {"key": "SEARCH_MODEL", "value": "groq/compound-mini"},
-  {"key": "SEARCH_FALLBACK_MODELS", "value": "groq/compound"},
   {"key": "LLM_FALLBACK_MODELS", "value": "openai/gpt-oss-120b,qwen/qwen3.6-27b"},
   {"key": "MAX_CONTEXT_CHARS", "value": "14000"},
   {"key": "MAX_OUTPUT_TOKENS", "value": "1200"},

@@ -13,7 +13,7 @@
 - thème clair/sombre ;
 - ajout de fichiers texte (`TXT`, `MD`, `CSV`, `JSON`) ;
 - API serveur compatible OpenAI Chat Completions ;
-- recherche web automatique via Groq Compound pour les questions récentes ;
+- recherche web légère sans clé supplémentaire pour les questions récentes ;
 - historique compacté, nouvelle tentative automatique et modèles de secours en cas de quota ;
 - Tavily facultatif comme moteur de recherche supplémentaire ;
 - HTTPS automatique avec Caddy ;
