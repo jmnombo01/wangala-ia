@@ -948,6 +948,20 @@ summary {
   margin: 0;
 }
 
+.rich-text a {
+  color: var(--green);
+  font-weight: 650;
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--green) 35%, transparent);
+  text-underline-offset: 3px;
+  overflow-wrap: anywhere;
+}
+
+.rich-text a:hover {
+  color: var(--green-bright);
+  text-decoration-color: currentColor;
+}
+
 .text-spacer {
   height: 9px;
 }

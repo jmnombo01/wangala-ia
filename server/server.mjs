@@ -9,13 +9,26 @@ const STATIC_DIR = process.env.STATIC_DIR || fileURLToPath(new URL('../frontend/
 const LLM_API_URL = (process.env.LLM_API_URL || 'https://api.openai.com/v1').replace(/\/$/, '')
 const LLM_API_KEY = process.env.LLM_API_KEY || ''
 const LLM_MODEL = process.env.LLM_MODEL || ''
+const SEARCH_MODEL = process.env.SEARCH_MODEL || 'groq/compound-mini'
+const FALLBACK_MODELS = (process.env.LLM_FALLBACK_MODELS || 'openai/gpt-oss-120b,qwen/qwen3.6-27b')
+  .split(',')
+  .map((model) => model.trim())
+  .filter(Boolean)
 const TAVILY_API_KEY = process.env.TAVILY_API_KEY || ''
 const ALLOWED_ORIGIN = process.env.ALLOWED_ORIGIN || ''
 const MAX_BODY_BYTES = 1_000_000
+const MAX_CONTEXT_CHARS = Number(process.env.MAX_CONTEXT_CHARS || 14_000)
+const MAX_OUTPUT_TOKENS = Number(process.env.MAX_OUTPUT_TOKENS || 1_200)
 const MAX_REQUESTS_PER_MINUTE = Number(process.env.RATE_LIMIT_PER_MINUTE || 30)
+const PROVIDER_RETRIES = Number(process.env.PROVIDER_RETRIES || 1)
 const rateLimits = new Map()
 
-const SYSTEM_PROMPT = process.env.SYSTEM_PROMPT || `Tu es Wangala Agent, un assistant IA francophone fiable, méthodique et orienté vers l'action. Tu réponds d'abord en français, sauf demande contraire. Tu tiens compte avec respect du contexte du Burkina Faso et de l'Afrique de l'Ouest lorsque cela est pertinent, sans stéréotype ni supposition. Tu structures clairement tes réponses, signales tes incertitudes et ne prétends jamais avoir effectué une action ou une recherche que tu n'as pas réalisée. Pour les sujets importants (santé, droit, finance, sécurité), rappelle à l'utilisateur de vérifier auprès d'une source qualifiée.`
+const currentDate = new Intl.DateTimeFormat('fr-FR', {
+  dateStyle: 'full',
+  timeZone: 'Africa/Ouagadougou',
+}).format(new Date())
+
+const SYSTEM_PROMPT = process.env.SYSTEM_PROMPT || `Tu es Wangala Agent, un assistant IA francophone fiable, méthodique, utile et orienté vers l'action. Nous sommes le ${currentDate}, fuseau Africa/Ouagadougou. Réponds d'abord en français, sauf demande contraire. Tiens compte avec respect du contexte du Burkina Faso et de l'Afrique de l'Ouest lorsque c'est pertinent, sans stéréotype ni supposition. Réponds directement à toute demande légale et sûre : ne refuse pas une question simplement parce qu'elle implique une estimation, une comparaison, un pari ou une incertitude. Pour les courses hippiques et autres jeux d'argent, tu peux fournir une analyse factuelle, les partants, la forme et des scénarios, mais ne garantis jamais un gain et rappelle brièvement que le résultat reste incertain et qu'il faut limiter sa mise. Pour la santé, le droit, la finance et la sécurité, donne des informations utiles tout en recommandant une vérification professionnelle lorsque l'enjeu est important. Si tu utilises une recherche, cite les sources ou liens disponibles. N'invente jamais une donnée, une source, une action ou une recherche.`
 
 const mimeTypes = {
   '.html': 'text/html; charset=utf-8',
@@ -29,6 +42,18 @@ const mimeTypes = {
   '.ico': 'image/x-icon',
   '.woff2': 'font/woff2',
 }
+
+class ProviderError extends Error {
+  constructor(code, status, model) {
+    super(code)
+    this.name = 'ProviderError'
+    this.code = code
+    this.status = status
+    this.model = model
+  }
+}
+
+const wait = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds))
 
 function corsHeaders(request) {
   const origin = request.headers.origin || ''
@@ -89,50 +114,103 @@ async function readJsonBody(request) {
 
 function sanitizeMessages(input) {
   if (!Array.isArray(input)) return []
-  return input
-    .slice(-30)
+  const cleaned = input
+    .slice(-16)
     .filter((message) => message && ['user', 'assistant'].includes(message.role))
     .map((message) => ({
       role: message.role,
-      content: String(message.content || '').slice(0, 120_000),
+      content: String(message.content || '').trim().slice(0, MAX_CONTEXT_CHARS),
     }))
-    .filter((message) => message.content.trim())
+    .filter((message) => message.content)
+
+  const selected = []
+  let remaining = MAX_CONTEXT_CHARS
+  for (let index = cleaned.length - 1; index >= 0 && selected.length < 12; index -= 1) {
+    const message = cleaned[index]
+    if (remaining <= 0) break
+    const content = message.content.slice(-remaining)
+    if (!content) continue
+    selected.unshift({ ...message, content })
+    remaining -= content.length
+  }
+  return selected
 }
 
-async function callModel(messages, tools) {
-  const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), 90_000)
-  try {
-    const payload = {
-      model: LLM_MODEL,
-      messages,
-      temperature: 0.3,
-      ...(tools.length ? { tools, tool_choice: 'auto' } : {}),
-    }
-    const response = await fetch(`${LLM_API_URL}/chat/completions`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${LLM_API_KEY}`,
-      },
-      body: JSON.stringify(payload),
-      signal: controller.signal,
-    })
-    const body = await response.json().catch(() => null)
-    if (!response.ok) {
-      const providerMessage = body?.error?.message || `Erreur du fournisseur (${response.status})`
-      throw new Error(providerMessage)
-    }
-    const message = body?.choices?.[0]?.message
-    if (!message) throw new Error("Le fournisseur n'a renvoyé aucune réponse exploitable.")
-    return message
-  } finally {
-    clearTimeout(timeout)
+function needsFreshInformation(messages) {
+  const latest = [...messages].reverse().find((message) => message.role === 'user')?.content || ''
+  return /(aujourd['’]?hui|du jour|maintenant|actuel(?:le)?s?|récent(?:e)?s?|derni[eè]re?s?|nouveau|nouvelles|actualité|météo|prix|tarif|cours|score|résultat|calendrier|disponib|quint[ée]|pmu|course hippique|pronostic|élection|marché|bourse|taux de change|202[5-9])/i.test(latest)
+}
+
+function extractRetrySeconds(response, body) {
+  const header = Number(response.headers.get('retry-after'))
+  if (Number.isFinite(header) && header > 0) return Math.min(header, 25)
+  const message = body?.error?.message || ''
+  const match = message.match(/try again in\s+([\d.]+)s/i)
+  return match ? Math.min(Math.ceil(Number(match[1])) + 1, 25) : 8
+}
+
+function extractContent(message) {
+  if (typeof message?.content === 'string') return message.content.trim()
+  if (Array.isArray(message?.content)) {
+    return message.content
+      .map((part) => typeof part === 'string' ? part : part?.text || '')
+      .join('\n')
+      .trim()
   }
+  return ''
+}
+
+async function requestModel(model, messages, tools = []) {
+  for (let attempt = 0; attempt <= PROVIDER_RETRIES; attempt += 1) {
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), 100_000)
+    try {
+      const payload = {
+        model,
+        messages,
+        temperature: 0.35,
+        max_completion_tokens: MAX_OUTPUT_TOKENS,
+        ...(tools.length ? { tools, tool_choice: 'auto' } : {}),
+      }
+      const response = await fetch(`${LLM_API_URL}/chat/completions`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${LLM_API_KEY}`,
+        },
+        body: JSON.stringify(payload),
+        signal: controller.signal,
+      })
+      const body = await response.json().catch(() => null)
+      if (response.ok) {
+        const message = body?.choices?.[0]?.message
+        if (!message) throw new ProviderError('EMPTY_RESPONSE', 502, model)
+        return message
+      }
+
+      if (response.status === 429 && attempt < PROVIDER_RETRIES) {
+        await wait(extractRetrySeconds(response, body) * 1_000)
+        continue
+      }
+      if (response.status === 429) throw new ProviderError('RATE_LIMIT', 429, model)
+      if (response.status === 401 || response.status === 403) throw new ProviderError('AUTH_ERROR', response.status, model)
+      if (response.status === 404 || /does not exist|do not have access/i.test(body?.error?.message || '')) {
+        throw new ProviderError('MODEL_UNAVAILABLE', response.status, model)
+      }
+      throw new ProviderError('PROVIDER_ERROR', response.status, model)
+    } catch (error) {
+      if (error instanceof ProviderError) throw error
+      if (error?.name === 'AbortError') throw new ProviderError('TIMEOUT', 504, model)
+      throw new ProviderError('NETWORK_ERROR', 502, model)
+    } finally {
+      clearTimeout(timeout)
+    }
+  }
+  throw new ProviderError('RATE_LIMIT', 429, model)
 }
 
 async function webSearch(query) {
-  if (!TAVILY_API_KEY) return { error: 'La recherche web n’est pas configurée.' }
+  if (!TAVILY_API_KEY) return { error: 'La recherche web externe n’est pas configurée.' }
   const response = await fetch('https://api.tavily.com/search', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -144,7 +222,7 @@ async function webSearch(query) {
       include_answer: true,
     }),
   })
-  if (!response.ok) return { error: `Recherche indisponible (${response.status}).` }
+  if (!response.ok) return { error: 'La recherche externe est momentanément indisponible.' }
   const body = await response.json()
   return {
     answer: body.answer,
@@ -191,20 +269,34 @@ async function executeTool(name, args) {
   return { error: `Outil inconnu : ${name}` }
 }
 
-async function runAgent(userMessages) {
+async function runWithModel(userMessages, model, useBuiltInSearch = false) {
   const messages = [{ role: 'system', content: SYSTEM_PROMPT }, ...userMessages]
   const trace = [{ label: 'Demande analysée', detail: 'Contexte et objectif identifiés' }]
 
-  for (let step = 0; step < 4; step += 1) {
-    const modelMessage = await callModel(messages, agentTools)
+  if (useBuiltInSearch) {
+    const modelMessage = await requestModel(model, messages)
+    const content = extractContent(modelMessage)
+    if (!content) throw new ProviderError('EMPTY_RESPONSE', 502, model)
+    const executedTools = Array.isArray(modelMessage.executed_tools) ? modelMessage.executed_tools : []
+    if (executedTools.length) {
+      trace.push({
+        label: 'Recherche web effectuée',
+        detail: `${executedTools.length} outil${executedTools.length > 1 ? 's' : ''} utilisé${executedTools.length > 1 ? 's' : ''}`,
+      })
+    }
+    trace.push({ label: 'Réponse vérifiée', detail: 'Informations récentes intégrées' })
+    return { content, trace }
+  }
+
+  for (let step = 0; step < 3; step += 1) {
+    const modelMessage = await requestModel(model, messages, agentTools)
     const toolCalls = Array.isArray(modelMessage.tool_calls) ? modelMessage.tool_calls : []
+    const content = extractContent(modelMessage)
 
     if (!toolCalls.length) {
-      trace.push({ label: 'Réponse préparée', detail: step ? 'Résultats des outils intégrés' : 'Raisonnement finalisé' })
-      return {
-        content: String(modelMessage.content || 'Je ne peux pas répondre pour le moment.'),
-        trace,
-      }
+      if (!content) throw new ProviderError('EMPTY_RESPONSE', 502, model)
+      trace.push({ label: 'Réponse préparée', detail: step ? 'Résultats des outils intégrés' : 'Analyse finalisée' })
+      return { content, trace }
     }
 
     messages.push(modelMessage)
@@ -220,12 +312,47 @@ async function runAgent(userMessages) {
       messages.push({
         role: 'tool',
         tool_call_id: toolCall.id,
-        content: JSON.stringify(result).slice(0, 60_000),
+        content: JSON.stringify(result).slice(0, 30_000),
       })
     }
   }
 
-  throw new Error("L’agent a atteint sa limite d’étapes. Reformulez votre demande.")
+  throw new ProviderError('TOOL_LIMIT', 502, model)
+}
+
+async function runAgent(userMessages) {
+  const freshInformation = needsFreshInformation(userMessages)
+  const candidates = [
+    ...(freshInformation && SEARCH_MODEL ? [{ model: SEARCH_MODEL, search: true }] : []),
+    { model: LLM_MODEL, search: false },
+    ...FALLBACK_MODELS.map((model) => ({ model, search: false })),
+  ].filter((candidate, index, all) => candidate.model && all.findIndex((item) => item.model === candidate.model) === index)
+
+  let lastError = null
+  for (const candidate of candidates) {
+    try {
+      return await runWithModel(userMessages, candidate.model, candidate.search)
+    } catch (error) {
+      lastError = error
+      if (!(error instanceof ProviderError)) throw error
+      console.warn(`[wangala-api] modèle ${candidate.model} indisponible (${error.code}), bascule automatique`)
+    }
+  }
+  throw lastError || new ProviderError('PROVIDER_ERROR', 502, LLM_MODEL)
+}
+
+function friendlyError(error) {
+  if (!(error instanceof ProviderError)) return { status: 502, message: 'Wangala rencontre un problème temporaire. Réessayez dans quelques instants.' }
+  if (error.code === 'RATE_LIMIT') {
+    return { status: 429, message: 'Wangala est très sollicité. Patientez une vingtaine de secondes puis réessayez.' }
+  }
+  if (error.code === 'AUTH_ERROR') {
+    return { status: 503, message: 'Le service IA doit être reconnecté par l’administrateur.' }
+  }
+  if (error.code === 'TIMEOUT') {
+    return { status: 504, message: 'La réponse prend plus de temps que prévu. Réessayez avec une demande plus courte.' }
+  }
+  return { status: 502, message: 'Wangala n’a pas pu finaliser cette réponse. Réessayez dans quelques instants.' }
 }
 
 async function serveStatic(request, response) {
@@ -270,7 +397,8 @@ const server = createServer(async (request, response) => {
       status: 'ok',
       service: 'wangala-ia',
       modelConfigured: Boolean(LLM_API_KEY && LLM_MODEL),
-      webSearchConfigured: Boolean(TAVILY_API_KEY),
+      webSearchConfigured: Boolean(LLM_API_KEY && (SEARCH_MODEL || TAVILY_API_KEY)),
+      automaticFallbacks: FALLBACK_MODELS.length,
     }, cors)
   }
 
@@ -279,7 +407,7 @@ const server = createServer(async (request, response) => {
       return sendJson(response, 403, { error: 'Origine non autorisée.' }, cors)
     }
     if (isRateLimited(request)) {
-      return sendJson(response, 429, { error: 'Trop de demandes. Réessayez dans une minute.' }, cors)
+      return sendJson(response, 429, { error: 'Trop de demandes simultanées. Réessayez dans une minute.' }, cors)
     }
     if (!LLM_API_KEY || !LLM_MODEL) {
       return sendJson(response, 503, { error: 'Le modèle IA n’est pas encore configuré sur le serveur.' }, cors)
@@ -300,8 +428,9 @@ const server = createServer(async (request, response) => {
       if (error?.message === 'INVALID_JSON') {
         return sendJson(response, 400, { error: 'Le format de la demande est invalide.' }, cors)
       }
-      console.error('[wangala-api]', error)
-      return sendJson(response, 502, { error: error?.message || 'Erreur du service IA.' }, cors)
+      console.error('[wangala-api]', error?.code || error?.message || error)
+      const friendly = friendlyError(error)
+      return sendJson(response, friendly.status, { error: friendly.message }, cors)
     }
   }
 

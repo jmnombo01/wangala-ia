@@ -110,7 +110,21 @@ const suggestions: Suggestion[] = [
 function loadConversations(): Conversation[] {
   try {
     const stored = window.localStorage.getItem(STORAGE_KEY)
-    return stored ? JSON.parse(stored) : []
+    if (!stored) return []
+    const parsed = JSON.parse(stored) as Conversation[]
+    return parsed.map((conversation) => ({
+      ...conversation,
+      messages: conversation.messages.map((message) => {
+        const exposesProviderError = message.role === 'assistant'
+          && /(rate limit reached|tokens per minute|service tier|console\.groq\.com\/settings\/billing)/i.test(message.content)
+        if (!exposesProviderError) return message
+        return {
+          ...message,
+          content: 'Wangala était momentanément très sollicité. Cette erreur technique a été corrigée ; vous pouvez relancer la question.',
+          error: true,
+        }
+      }),
+    }))
   } catch {
     return []
   }
@@ -129,7 +143,7 @@ function formatFileSize(size: number) {
 }
 
 function InlineText({ children }: { children: string }) {
-  const parts = children.split(/(\*\*[^*]+\*\*|\*[^*]+\*)/g)
+  const parts = children.split(/(\*\*[^*]+\*\*|\*[^*]+\*|\[[^\]]+\]\(https?:\/\/[^\s)]+\)|https?:\/\/[^\s]+)/g)
   return (
     <>
       {parts.map((part, index) => {
@@ -138,6 +152,13 @@ function InlineText({ children }: { children: string }) {
         }
         if (part.startsWith('*') && part.endsWith('*')) {
           return <em key={index}>{part.slice(1, -1)}</em>
+        }
+        const markdownLink = part.match(/^\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)$/)
+        if (markdownLink) {
+          return <a href={markdownLink[2]} target="_blank" rel="noreferrer" key={index}>{markdownLink[1]}</a>
+        }
+        if (/^https?:\/\//.test(part)) {
+          return <a href={part} target="_blank" rel="noreferrer" key={index}>{part}</a>
         }
         return part
       })}
