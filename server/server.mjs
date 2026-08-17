@@ -165,12 +165,18 @@ async function requestModel(model, messages, tools = []) {
     const controller = new AbortController()
     const timeout = setTimeout(() => controller.abort(), 100_000)
     try {
+      const useGroqBuiltInSearch = model === SEARCH_MODEL && model.startsWith('groq/compound')
       const payload = {
         model,
         messages,
         temperature: 0.35,
         max_completion_tokens: MAX_OUTPUT_TOKENS,
         ...(tools.length ? { tools, tool_choice: 'auto' } : {}),
+        ...(useGroqBuiltInSearch ? {
+          compound_custom: {
+            tools: { enabled_tools: ['web_search', 'visit_website'] },
+          },
+        } : {}),
       }
       const response = await fetch(`${LLM_API_URL}/chat/completions`, {
         method: 'POST',
