@@ -402,6 +402,7 @@ const server = createServer(async (request, response) => {
     return sendJson(response, 200, {
       status: 'ok',
       service: 'wangala-ia',
+      release: '0.2.0',
       modelConfigured: Boolean(LLM_API_KEY && LLM_MODEL),
       webSearchConfigured: Boolean(LLM_API_KEY && (SEARCH_MODEL || TAVILY_API_KEY)),
       automaticFallbacks: FALLBACK_MODELS.length,
