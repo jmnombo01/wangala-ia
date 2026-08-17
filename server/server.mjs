@@ -198,6 +198,13 @@ async function requestModel(model, messages, tools = [], forceBuiltInSearch = fa
         return message
       }
 
+      const diagnostic = String(body?.error?.message || `HTTP ${response.status}`)
+        .replace(/org_[a-zA-Z0-9]+/g, 'org_***')
+        .replace(/https?:\/\/\S+/g, '[url]')
+        .replace(/(bearer|api[_ -]?key|token)\s*[:=]?\s*[a-zA-Z0-9._-]+/gi, '$1 ***')
+        .slice(0, 280)
+      console.warn(`[wangala-provider] ${model} HTTP ${response.status}: ${diagnostic}`)
+
       if (response.status === 429 && attempt < PROVIDER_RETRIES) {
         await wait(extractRetrySeconds(response, body) * 1_000)
         continue
@@ -410,7 +417,7 @@ const server = createServer(async (request, response) => {
     return sendJson(response, 200, {
       status: 'ok',
       service: 'wangala-ia',
-      release: '0.2.1',
+      release: '0.2.2',
       modelConfigured: Boolean(LLM_API_KEY && LLM_MODEL),
       webSearchConfigured: Boolean(LLM_API_KEY && (SEARCH_MODEL || TAVILY_API_KEY)),
       automaticFallbacks: FALLBACK_MODELS.length,
