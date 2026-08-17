@@ -11,12 +11,15 @@ import {
 import {
   LuArrowUp,
   LuBookOpen,
-  LuBriefcaseBusiness,
+  LuCode,
+  LuDownload,
   LuCheck,
   LuChevronDown,
   LuCopy,
   LuFileText,
+  LuFolderOpen,
   LuGlobe,
+  LuImage,
   LuCircleHelp,
   LuLanguages,
   LuMenu,
@@ -24,6 +27,7 @@ import {
   LuMoon,
   LuEllipsis,
   LuPaperclip,
+  LuPanelRight,
   LuRotateCcw,
   LuSearch,
   LuSettings,
@@ -33,12 +37,14 @@ import {
   LuSun,
   LuThumbsDown,
   LuThumbsUp,
+  LuTerminal,
   LuTrash2,
   LuWifi,
   LuX,
 } from 'react-icons/lu'
 import BrandMark from './components/BrandMark'
 import {
+  AgentArtifact,
   AgentTrace,
   ChatMessage,
   isDemoMode,
@@ -56,6 +62,7 @@ type Message = ChatMessage & {
   createdAt: number
   trace?: AgentTrace[]
   attachments?: Attachment[]
+  artifacts?: AgentArtifact[]
   error?: boolean
 }
 
@@ -64,6 +71,12 @@ type Conversation = {
   title: string
   messages: Message[]
   updatedAt: number
+}
+
+type Capabilities = {
+  workspaceConfigured: boolean
+  imageGenerationConfigured: boolean
+  videoGenerationConfigured: boolean
 }
 
 type Suggestion = {
@@ -75,6 +88,45 @@ type Suggestion = {
 }
 
 const STORAGE_KEY = 'wangala-ia-conversations-v1'
+const WORKSPACE_DB = 'wangala-ia-workspace-v1'
+const WORKSPACE_STORE = 'artifacts'
+
+function openWorkspaceDb(): Promise<IDBDatabase> {
+  return new Promise((resolve, reject) => {
+    const request = window.indexedDB.open(WORKSPACE_DB, 1)
+    request.onupgradeneeded = () => {
+      const database = request.result
+      if (!database.objectStoreNames.contains(WORKSPACE_STORE)) {
+        database.createObjectStore(WORKSPACE_STORE, { keyPath: 'id' })
+      }
+    }
+    request.onsuccess = () => resolve(request.result)
+    request.onerror = () => reject(request.error)
+  })
+}
+
+async function persistArtifact(artifact: AgentArtifact) {
+  if (!artifact.url?.startsWith('data:')) return
+  const database = await openWorkspaceDb()
+  await new Promise<void>((resolve, reject) => {
+    const transaction = database.transaction(WORKSPACE_STORE, 'readwrite')
+    transaction.objectStore(WORKSPACE_STORE).put({ id: artifact.id, url: artifact.url })
+    transaction.oncomplete = () => resolve()
+    transaction.onerror = () => reject(transaction.error)
+  })
+  database.close()
+}
+
+async function restoreArtifactUrl(id: string): Promise<string | undefined> {
+  const database = await openWorkspaceDb()
+  const result = await new Promise<{ id: string; url: string } | undefined>((resolve, reject) => {
+    const request = database.transaction(WORKSPACE_STORE, 'readonly').objectStore(WORKSPACE_STORE).get(id)
+    request.onsuccess = () => resolve(request.result)
+    request.onerror = () => reject(request.error)
+  })
+  database.close()
+  return result?.url
+}
 
 const suggestions: Suggestion[] = [
   {
@@ -85,10 +137,10 @@ const suggestions: Suggestion[] = [
     tone: 'green',
   },
   {
-    title: 'Développer une idée',
-    description: "Structurer un projet d’entreprise",
-    prompt: "Aide-moi à structurer une idée d’entreprise adaptée à mon marché local.",
-    icon: <LuBriefcaseBusiness />,
+    title: 'Analyser par le code',
+    description: 'Calculer, traiter des données ou tracer un graphique',
+    prompt: 'Utilise Python pour calculer les mensualités d’un prêt de 2 000 000 FCFA sur 3 ans à 8 %, puis crée un graphique simple.',
+    icon: <LuCode />,
     tone: 'gold',
   },
   {
@@ -99,10 +151,10 @@ const suggestions: Suggestion[] = [
     tone: 'red',
   },
   {
-    title: 'Préparer un plan',
-    description: 'Passer rapidement de l’idée à l’action',
-    prompt: 'Prépare-moi un plan de travail simple, précis et réaliste.',
-    icon: <LuSparkles />,
+    title: 'Créer une image',
+    description: 'Transformer une idée en visuel original',
+    prompt: 'Génère une image carrée : une ville africaine durable et futuriste au coucher du soleil, style éditorial haut de gamme.',
+    icon: <LuImage />,
     tone: 'ink',
   },
 ]
@@ -204,16 +256,19 @@ function App() {
   const [search, setSearch] = useState('')
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [workspaceOpen, setWorkspaceOpen] = useState(false)
   const [darkMode, setDarkMode] = useState(false)
   const [copiedId, setCopiedId] = useState<string | null>(null)
   const [feedback, setFeedback] = useState<Record<string, 'up' | 'down'>>({})
   const [notice, setNotice] = useState('')
+  const [capabilities, setCapabilities] = useState<Capabilities | null>(null)
   const textAreaRef = useRef<HTMLTextAreaElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
 
   const activeConversation = conversations.find((item) => item.id === activeId)
   const messages = activeConversation?.messages ?? []
+  const workspaceArtifacts = messages.flatMap((message) => message.artifacts ?? [])
 
   const filteredConversations = useMemo(() => {
     const query = search.trim().toLocaleLowerCase('fr')
@@ -223,8 +278,44 @@ function App() {
   }, [conversations, search])
 
   useEffect(() => {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(conversations))
+    const lightweight = conversations.map((conversation) => ({
+      ...conversation,
+      messages: conversation.messages.map((message) => ({
+        ...message,
+        artifacts: message.artifacts?.map((artifact) => ({
+          ...artifact,
+          url: artifact.url?.startsWith('data:') ? undefined : artifact.url,
+        })),
+      })),
+    }))
+    try {
+      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(lightweight))
+    } catch {
+      setNotice('Le stockage local est plein. Téléchargez vos créations importantes.')
+    }
   }, [conversations])
+
+  useEffect(() => {
+    const missing = conversations.flatMap((conversation) => conversation.messages.flatMap((message) =>
+      (message.artifacts ?? []).filter((artifact) => !artifact.url && artifact.type === 'image'),
+    ))
+    if (!missing.length) return
+    void Promise.all(missing.map(async (artifact) => ({ id: artifact.id, url: await restoreArtifactUrl(artifact.id) })))
+      .then((restored) => {
+        const urls = new Map(restored.filter((item) => item.url).map((item) => [item.id, item.url!]))
+        if (!urls.size) return
+        setConversations((current) => current.map((conversation) => ({
+          ...conversation,
+          messages: conversation.messages.map((message) => ({
+            ...message,
+            artifacts: message.artifacts?.map((artifact) => urls.has(artifact.id)
+              ? { ...artifact, url: urls.get(artifact.id) }
+              : artifact),
+          })),
+        })))
+      })
+      .catch(() => undefined)
+  }, [])
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -233,6 +324,18 @@ function App() {
   useEffect(() => {
     document.documentElement.dataset.theme = darkMode ? 'dark' : 'light'
   }, [darkMode])
+
+  useEffect(() => {
+    if (isDemoMode) return
+    void fetch('/api/health')
+      .then((response) => response.ok ? response.json() : null)
+      .then((health) => health && setCapabilities({
+        workspaceConfigured: Boolean(health.workspaceConfigured),
+        imageGenerationConfigured: Boolean(health.imageGenerationConfigured),
+        videoGenerationConfigured: Boolean(health.videoGenerationConfigured),
+      }))
+      .catch(() => undefined)
+  }, [])
 
   useEffect(() => {
     if (!notice) return
@@ -329,13 +432,19 @@ function App() {
 
     try {
       const response = await sendToAgent(apiMessages)
+      const generatedArtifacts = response.artifacts ?? []
+      void Promise.all(generatedArtifacts.map(persistArtifact)).catch(() => {
+        setNotice('Une création n’a pas pu être enregistrée localement.')
+      })
       const assistantMessage: Message = {
         id: crypto.randomUUID(),
         role: 'assistant',
         content: response.content,
         createdAt: Date.now(),
         trace: response.trace,
+        artifacts: generatedArtifacts,
       }
+      if (generatedArtifacts.length) setWorkspaceOpen(true)
       setConversations((current) => current.map((item) => item.id === conversationId
         ? { ...item, messages: [...item.messages, assistantMessage], updatedAt: Date.now() }
         : item))
@@ -371,6 +480,24 @@ function App() {
     await navigator.clipboard.writeText(message.content)
     setCopiedId(message.id)
     window.setTimeout(() => setCopiedId(null), 1600)
+  }
+
+  function downloadArtifact(artifact: AgentArtifact) {
+    const anchor = document.createElement('a')
+    if (artifact.url) {
+      anchor.href = artifact.url
+    } else {
+      const payload = artifact.type === 'code'
+        ? `${artifact.content || ''}\n\n--- Sortie ---\n${artifact.output || ''}`
+        : artifact.content || ''
+      anchor.href = URL.createObjectURL(new Blob([payload], { type: 'text/plain;charset=utf-8' }))
+    }
+    const extension = artifact.type === 'image'
+      ? artifact.mimeType?.split('/')[1]?.replace('jpeg', 'jpg') || 'png'
+      : artifact.language === 'python' ? 'py' : artifact.language === 'javascript' ? 'js' : artifact.language === 'typescript' ? 'ts' : 'txt'
+    anchor.download = `${artifact.name.replace(/[^a-zA-Z0-9à-ÿ_-]+/g, '-')}.${extension}`
+    anchor.click()
+    if (anchor.href.startsWith('blob:')) URL.revokeObjectURL(anchor.href)
   }
 
   function retryLastMessage() {
@@ -474,6 +601,9 @@ function App() {
           </div>
           <div className="topbar-actions">
             <span className="connection"><LuWifi /> Connecté</span>
+            <button className={`workspace-button ${workspaceOpen ? 'active' : ''}`} onClick={() => setWorkspaceOpen((current) => !current)}>
+              <LuPanelRight /> <span>Workspace</span>{workspaceArtifacts.length > 0 && <b>{workspaceArtifacts.length}</b>}
+            </button>
             <button className="language-button"><LuLanguages /> Français</button>
             <button className="icon-button" onClick={() => setDarkMode((current) => !current)} aria-label="Changer de thème">
               {darkMode ? <LuSun /> : <LuMoon />}
@@ -540,6 +670,17 @@ function App() {
                         </div>
                       ) : null}
                       <div className="message-content"><RichText text={message.content} /></div>
+                      {message.artifacts?.length ? (
+                        <div className="message-artifacts">
+                          {message.artifacts.map((artifact) => (
+                            <button className="artifact-inline" key={artifact.id} onClick={() => setWorkspaceOpen(true)}>
+                              <span>{artifact.type === 'image' ? <LuImage /> : <LuCode />}</span>
+                              <span><strong>{artifact.name}</strong><small>{artifact.type === 'image' ? 'Image' : `Code ${artifact.language || ''}`}</small></span>
+                              <LuPanelRight />
+                            </button>
+                          ))}
+                        </div>
+                      ) : null}
                       {message.trace?.length ? (
                         <details className="agent-trace">
                           <summary><LuCheck /> Travail de l’agent <span>{message.trace.length} étapes</span></summary>
@@ -639,6 +780,55 @@ function App() {
           </div>
         </div>
       </main>
+
+      <aside className={`workspace-panel ${workspaceOpen ? 'workspace-panel-open' : ''}`} aria-hidden={!workspaceOpen}>
+        <div className="workspace-panel-head">
+          <div>
+            <small>ESPACE DE TRAVAIL</small>
+            <h2>Workspace</h2>
+          </div>
+          <button className="icon-button" onClick={() => setWorkspaceOpen(false)} aria-label="Fermer le workspace"><LuX /></button>
+        </div>
+        <div className="workspace-summary">
+          <span><LuFolderOpen /></span>
+          <div><strong>{workspaceArtifacts.length} élément{workspaceArtifacts.length > 1 ? 's' : ''}</strong><small>Conservés sur cet appareil</small></div>
+        </div>
+        <div className="workspace-capabilities">
+          <span className={capabilities?.workspaceConfigured ? 'ready' : ''}><LuTerminal /> Code <i /></span>
+          <span className={capabilities?.imageGenerationConfigured ? 'ready' : ''}><LuImage /> Images <i /></span>
+          <span className={capabilities?.videoGenerationConfigured ? 'ready' : ''}><LuImage /> Vidéo <i /></span>
+        </div>
+        <div className="workspace-list">
+          {workspaceArtifacts.length ? workspaceArtifacts.map((artifact) => (
+            <article className="workspace-artifact" key={artifact.id}>
+              {artifact.type === 'image' && artifact.url ? (
+                <img src={artifact.url} alt={artifact.name} />
+              ) : (
+                <div className="code-preview">
+                  <span><LuTerminal /></span>
+                  <pre>{artifact.content || artifact.output || 'Résultat d’exécution'}</pre>
+                </div>
+              )}
+              <div className="workspace-artifact-meta">
+                <span className={`artifact-type ${artifact.type}`}>
+                  {artifact.type === 'image' ? <LuImage /> : <LuCode />}
+                </span>
+                <div><strong>{artifact.name}</strong><small>{artifact.type === 'image' ? artifact.mimeType || 'Image' : artifact.language || 'Code'}</small></div>
+                <button onClick={() => downloadArtifact(artifact)} aria-label={`Télécharger ${artifact.name}`}><LuDownload /></button>
+              </div>
+              {artifact.type === 'code' && artifact.output ? <pre className="artifact-output">{artifact.output}</pre> : null}
+            </article>
+          )) : (
+            <div className="workspace-empty">
+              <span><LuFolderOpen /></span>
+              <h3>Votre espace est vide</h3>
+              <p>Demandez à Wangala d’exécuter du code, de créer un graphique ou de générer une image.</p>
+              <div><LuCode /> Code <LuImage /> Images</div>
+            </div>
+          )}
+        </div>
+      </aside>
+      {workspaceOpen && <button className="workspace-scrim" onClick={() => setWorkspaceOpen(false)} aria-label="Fermer le workspace" />}
 
       {settingsOpen && (
         <div className="modal-layer" role="dialog" aria-modal="true" aria-label="Réglages">

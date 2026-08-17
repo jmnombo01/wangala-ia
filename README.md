@@ -15,6 +15,9 @@
 - API serveur compatible OpenAI Chat Completions ;
 - recherche web légère sans clé supplémentaire pour les questions récentes ;
 - historique compacté, nouvelle tentative automatique et modèles de secours en cas de quota ;
+- workspace local pour le code, les graphiques, les fichiers et les images ;
+- exécution Python, JavaScript, TypeScript et Bash dans un sandbox E2B isolé ;
+- génération d’images via Pollinations ;
 - Tavily facultatif comme moteur de recherche supplémentaire ;
 - HTTPS automatique avec Caddy ;
 - déploiement Docker Compose.

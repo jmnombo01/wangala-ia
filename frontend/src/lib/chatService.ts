@@ -8,9 +8,23 @@ export type AgentTrace = {
   detail?: string
 }
 
+export type AgentArtifact = {
+  id: string
+  type: 'code' | 'image' | 'file' | 'video'
+  name: string
+  language?: string
+  content?: string
+  output?: string
+  mimeType?: string
+  url?: string
+  prompt?: string
+  createdAt: number
+}
+
 export type AgentResponse = {
   content: string
   trace?: AgentTrace[]
+  artifacts?: AgentArtifact[]
 }
 
 const API_URL = (import.meta.env.VITE_CHAT_API_URL || '').replace(/\/$/, '')

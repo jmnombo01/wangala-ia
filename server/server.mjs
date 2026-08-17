@@ -2,6 +2,7 @@ import { createServer } from 'node:http'
 import { readFile, stat } from 'node:fs/promises'
 import { extname, join, normalize } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { randomUUID } from 'node:crypto'
 
 const PORT = Number(process.env.PORT || 8787)
 const HOST = process.env.HOST || '0.0.0.0'
@@ -14,6 +15,9 @@ const FALLBACK_MODELS = (process.env.LLM_FALLBACK_MODELS || 'openai/gpt-oss-120b
   .map((model) => model.trim())
   .filter(Boolean)
 const TAVILY_API_KEY = process.env.TAVILY_API_KEY || ''
+const E2B_API_KEY = process.env.E2B_API_KEY || ''
+const POLLINATIONS_API_KEY = process.env.POLLINATIONS_API_KEY || ''
+const IMAGE_MODEL = process.env.IMAGE_MODEL || 'zimage'
 const ALLOWED_ORIGIN = process.env.ALLOWED_ORIGIN || ''
 const MAX_BODY_BYTES = 1_000_000
 const MAX_CONTEXT_CHARS = Number(process.env.MAX_CONTEXT_CHARS || 14_000)
@@ -27,7 +31,7 @@ const currentDate = new Intl.DateTimeFormat('fr-FR', {
   timeZone: 'Africa/Ouagadougou',
 }).format(new Date())
 
-const SYSTEM_PROMPT = process.env.SYSTEM_PROMPT || `Tu es Wangala Agent, un assistant IA francophone fiable, méthodique, utile et orienté vers l'action. Nous sommes le ${currentDate}, fuseau Africa/Ouagadougou. Réponds d'abord en français, sauf demande contraire. Tiens compte avec respect du contexte du Burkina Faso et de l'Afrique de l'Ouest lorsque c'est pertinent, sans stéréotype ni supposition. Réponds directement à toute demande légale et sûre : ne refuse pas une question simplement parce qu'elle implique une estimation, une comparaison, un pari ou une incertitude. Pour les courses hippiques et autres jeux d'argent, tu peux fournir une analyse factuelle, les partants, la forme et des scénarios, mais ne garantis jamais un gain et rappelle brièvement que le résultat reste incertain et qu'il faut limiter sa mise. Pour la santé, le droit, la finance et la sécurité, donne des informations utiles tout en recommandant une vérification professionnelle lorsque l'enjeu est important. Si tu utilises une recherche, cite les sources ou liens disponibles. N'invente jamais une donnée, une source, une action ou une recherche.`
+const SYSTEM_PROMPT = process.env.SYSTEM_PROMPT || `Tu es Wangala Agent, un assistant IA francophone fiable, méthodique, utile et orienté vers l'action. Nous sommes le ${currentDate}, fuseau Africa/Ouagadougou. Réponds d'abord en français, sauf demande contraire. Tiens compte avec respect du contexte du Burkina Faso et de l'Afrique de l'Ouest lorsque c'est pertinent, sans stéréotype ni supposition. Réponds directement à toute demande légale et sûre : ne refuse pas une question simplement parce qu'elle implique une estimation, une comparaison, un pari ou une incertitude. Pour les courses hippiques et autres jeux d'argent, tu peux fournir une analyse factuelle, les partants, la forme et des scénarios, mais ne garantis jamais un gain et rappelle brièvement que le résultat reste incertain et qu'il faut limiter sa mise. Pour la santé, le droit, la finance et la sécurité, donne des informations utiles tout en recommandant une vérification professionnelle lorsque l'enjeu est important. Si tu utilises une recherche, cite les sources ou liens disponibles. Lorsque l’utilisateur demande un calcul, une analyse de données, un graphique ou l’exécution d’un programme, utilise l’outil de code disponible plutôt que de simuler le résultat. Lorsqu’il demande de créer une image, utilise l’outil de génération d’image disponible. N’affirme jamais avoir créé ou exécuté quelque chose sans résultat d’outil. N'invente jamais une donnée, une source, une action ou une recherche.`
 
 const mimeTypes = {
   '.html': 'text/html; charset=utf-8',
@@ -321,21 +325,204 @@ const agentTools = [
       parameters: { type: 'object', properties: {}, additionalProperties: false },
     },
   },
+  ...(E2B_API_KEY ? [{
+    type: 'function',
+    function: {
+      name: 'execute_code',
+      description: 'Exécuter du code Python, JavaScript, TypeScript ou Bash dans un sandbox E2B isolé. À utiliser pour les calculs, analyses de données, graphiques et programmes.',
+      parameters: {
+        type: 'object',
+        properties: {
+          language: { type: 'string', enum: ['python', 'javascript', 'typescript', 'bash'] },
+          code: { type: 'string', description: 'Code complet à exécuter' },
+          title: { type: 'string', description: 'Nom court de l’exécution' },
+        },
+        required: ['language', 'code'],
+        additionalProperties: false,
+      },
+    },
+  }] : []),
+  ...(POLLINATIONS_API_KEY ? [{
+    type: 'function',
+    function: {
+      name: 'generate_image',
+      description: 'Créer une image originale à partir d’une description textuelle et la placer dans le workspace.',
+      parameters: {
+        type: 'object',
+        properties: {
+          prompt: { type: 'string', description: 'Description visuelle détaillée de l’image' },
+          title: { type: 'string', description: 'Nom court de l’image' },
+          aspect_ratio: { type: 'string', enum: ['1:1', '16:9', '9:16', '4:3', '3:4'] },
+        },
+        required: ['prompt'],
+        additionalProperties: false,
+      },
+    },
+  }] : []),
 ]
 
+function outputLines(values) {
+  return (values || [])
+    .map((value) => typeof value === 'string' ? value : value?.line || value?.text || JSON.stringify(value))
+    .join('')
+    .slice(0, 20_000)
+}
+
+async function executeSandboxCode(args) {
+  if (!E2B_API_KEY) return { result: { success: false, error: 'Le workspace E2B n’est pas configuré.' }, artifacts: [] }
+  const code = String(args.code || '').slice(0, 30_000)
+  const languageMap = { python: 'python', javascript: 'javascript', typescript: 'ts', bash: 'bash' }
+  const language = languageMap[args.language] || 'python'
+  if (!code.trim()) return { result: { success: false, error: 'Aucun code à exécuter.' }, artifacts: [] }
+
+  let sandbox
+  try {
+    const { Sandbox } = await import('@e2b/code-interpreter')
+    sandbox = await Sandbox.create({ apiKey: E2B_API_KEY, timeoutMs: 120_000 })
+    const execution = await sandbox.runCode(code, { language, timeoutMs: 90_000 })
+    const stdout = outputLines(execution.logs?.stdout)
+    const stderr = outputLines(execution.logs?.stderr)
+    const artifacts = [{
+      id: randomUUID(),
+      type: 'code',
+      name: String(args.title || `Exécution ${language}`).slice(0, 80),
+      language,
+      content: code,
+      output: [stdout, stderr].filter(Boolean).join('\n').slice(0, 30_000),
+      createdAt: Date.now(),
+    }]
+    const richResults = []
+    for (const result of execution.results || []) {
+      if (result.png) {
+        artifacts.push({
+          id: randomUUID(),
+          type: 'image',
+          name: `Graphique ${artifacts.length}`,
+          mimeType: 'image/png',
+          url: `data:image/png;base64,${result.png}`,
+          createdAt: Date.now(),
+        })
+      } else if (result.jpeg) {
+        artifacts.push({
+          id: randomUUID(),
+          type: 'image',
+          name: `Image ${artifacts.length}`,
+          mimeType: 'image/jpeg',
+          url: `data:image/jpeg;base64,${result.jpeg}`,
+          createdAt: Date.now(),
+        })
+      } else if (result.svg) {
+        artifacts.push({
+          id: randomUUID(),
+          type: 'image',
+          name: `Graphique ${artifacts.length}`,
+          mimeType: 'image/svg+xml',
+          url: `data:image/svg+xml;base64,${Buffer.from(result.svg).toString('base64')}`,
+          createdAt: Date.now(),
+        })
+      }
+      if (result.text) richResults.push(String(result.text).slice(0, 5_000))
+      else if (result.json) richResults.push(JSON.stringify(result.json).slice(0, 5_000))
+    }
+    const error = execution.error
+      ? `${execution.error.name || 'Erreur'}: ${execution.error.value || execution.error.traceback || ''}`.slice(0, 8_000)
+      : ''
+    return {
+      result: {
+        success: !execution.error,
+        language,
+        stdout,
+        stderr,
+        results: richResults,
+        error,
+        artifactCount: artifacts.length,
+      },
+      artifacts,
+    }
+  } catch (error) {
+    return {
+      result: { success: false, error: `Le sandbox n’a pas pu exécuter le code : ${error?.message || 'erreur inconnue'}`.slice(0, 1_000) },
+      artifacts: [],
+    }
+  } finally {
+    if (sandbox) await sandbox.kill().catch(() => {})
+  }
+}
+
+function imageDimensions(aspectRatio) {
+  const dimensions = {
+    '16:9': [1024, 576],
+    '9:16': [576, 1024],
+    '4:3': [1024, 768],
+    '3:4': [768, 1024],
+    '1:1': [1024, 1024],
+  }
+  return dimensions[aspectRatio] || dimensions['1:1']
+}
+
+async function generateWorkspaceImage(args) {
+  if (!POLLINATIONS_API_KEY) return { result: { success: false, error: 'La génération d’images n’est pas configurée.' }, artifacts: [] }
+  const prompt = String(args.prompt || '').trim().slice(0, 2_000)
+  if (!prompt) return { result: { success: false, error: 'La description de l’image est vide.' }, artifacts: [] }
+  const [width, height] = imageDimensions(args.aspect_ratio)
+  const endpoint = `https://gen.pollinations.ai/image/${encodeURIComponent(prompt)}?model=${encodeURIComponent(IMAGE_MODEL)}&width=${width}&height=${height}&safe=true`
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), 180_000)
+  try {
+    const response = await fetch(endpoint, {
+      headers: { Authorization: `Bearer ${POLLINATIONS_API_KEY}` },
+      signal: controller.signal,
+    })
+    if (!response.ok) {
+      const providerError = await response.text().catch(() => '')
+      return {
+        result: { success: false, error: response.status === 402 ? 'Crédits image insuffisants.' : `Génération impossible (${response.status}).`, detail: providerError.slice(0, 300) },
+        artifacts: [],
+      }
+    }
+    const mimeType = response.headers.get('content-type')?.split(';')[0] || 'image/jpeg'
+    const buffer = Buffer.from(await response.arrayBuffer())
+    if (!mimeType.startsWith('image/') || buffer.length > 10_000_000) {
+      return { result: { success: false, error: 'Le média reçu est invalide ou trop volumineux.' }, artifacts: [] }
+    }
+    const artifact = {
+      id: randomUUID(),
+      type: 'image',
+      name: String(args.title || 'Image générée').slice(0, 80),
+      mimeType,
+      url: `data:${mimeType};base64,${buffer.toString('base64')}`,
+      prompt,
+      createdAt: Date.now(),
+    }
+    return {
+      result: { success: true, message: 'Image créée et ajoutée au workspace.', artifactCount: 1 },
+      artifacts: [artifact],
+    }
+  } catch (error) {
+    return { result: { success: false, error: error?.name === 'AbortError' ? 'La génération de l’image a expiré.' : 'Le service image est indisponible.' }, artifacts: [] }
+  } finally {
+    clearTimeout(timeout)
+  }
+}
+
 async function executeTool(name, args) {
+  if (name === 'execute_code') return executeSandboxCode(args)
+  if (name === 'generate_image') return generateWorkspaceImage(args)
   if (name === 'current_datetime') {
     return {
-      timezone: 'Africa/Ouagadougou',
-      value: new Intl.DateTimeFormat('fr-FR', {
-        dateStyle: 'full',
-        timeStyle: 'long',
-        timeZone: 'Africa/Ouagadougou',
-      }).format(new Date()),
+      result: {
+        timezone: 'Africa/Ouagadougou',
+        value: new Intl.DateTimeFormat('fr-FR', {
+          dateStyle: 'full',
+          timeStyle: 'long',
+          timeZone: 'Africa/Ouagadougou',
+        }).format(new Date()),
+      },
+      artifacts: [],
     }
   }
-  if (name === 'web_search') return webSearch(args.query)
-  return { error: `Outil inconnu : ${name}` }
+  if (name === 'web_search') return { result: await webSearch(args.query), artifacts: [] }
+  return { result: { error: `Outil inconnu : ${name}` }, artifacts: [] }
 }
 
 async function runWithModel(userMessages, model, searchContext = '', searchResultCount = 0) {
@@ -345,6 +532,7 @@ async function runWithModel(userMessages, model, searchContext = '', searchResul
     ...userMessages,
   ]
   const trace = [{ label: 'Demande analysée', detail: 'Contexte et objectif identifiés' }]
+  const artifacts = []
   if (searchContext) {
     trace.push({
       label: 'Recherche web effectuée',
@@ -360,7 +548,7 @@ async function runWithModel(userMessages, model, searchContext = '', searchResul
     if (!toolCalls.length) {
       if (!content) throw new ProviderError('EMPTY_RESPONSE', 502, model)
       trace.push({ label: 'Réponse préparée', detail: step ? 'Résultats des outils intégrés' : 'Analyse finalisée' })
-      return { content, trace }
+      return { content, trace, artifacts }
     }
 
     messages.push(modelMessage)
@@ -368,15 +556,24 @@ async function runWithModel(userMessages, model, searchContext = '', searchResul
       let args = {}
       try { args = JSON.parse(toolCall.function?.arguments || '{}') } catch { args = {} }
       const name = toolCall.function?.name || 'outil'
+      const labels = {
+        execute_code: ['Code exécuté dans le sandbox', String(args.title || args.language || 'Exécution').slice(0, 90)],
+        generate_image: ['Image générée', String(args.title || args.prompt || 'Création').slice(0, 90)],
+        current_datetime: ['Date actuelle vérifiée', 'Africa/Ouagadougou'],
+        web_search: ['Recherche web effectuée', String(args.query || '').slice(0, 90)],
+      }
+      const [label, detail] = labels[name] || ['Outil exécuté', name]
+      const toolOutput = await executeTool(name, args)
+      const toolFailed = toolOutput.result?.success === false
       trace.push({
-        label: name === 'web_search' ? 'Recherche web effectuée' : 'Date actuelle vérifiée',
-        detail: name === 'web_search' ? String(args.query || '').slice(0, 90) : 'Africa/Ouagadougou',
+        label: toolFailed ? 'Outil non exécuté' : label,
+        detail: toolFailed ? String(toolOutput.result?.error || detail).slice(0, 120) : detail,
       })
-      const result = await executeTool(name, args)
+      artifacts.push(...(toolOutput.artifacts || []))
       messages.push({
         role: 'tool',
         tool_call_id: toolCall.id,
-        content: JSON.stringify(result).slice(0, 30_000),
+        content: JSON.stringify(toolOutput.result).slice(0, 30_000),
       })
     }
   }
@@ -470,10 +667,13 @@ const server = createServer(async (request, response) => {
     return sendJson(response, 200, {
       status: 'ok',
       service: 'wangala-ia',
-      release: '0.3.0',
+      release: '0.4.0',
       modelConfigured: Boolean(LLM_API_KEY && LLM_MODEL),
       webSearchConfigured: true,
       searchProvider: TAVILY_API_KEY ? 'tavily' : 'rss',
+      workspaceConfigured: Boolean(E2B_API_KEY),
+      imageGenerationConfigured: Boolean(POLLINATIONS_API_KEY),
+      videoGenerationConfigured: false,
       automaticFallbacks: FALLBACK_MODELS.length,
     }, cors)
   }

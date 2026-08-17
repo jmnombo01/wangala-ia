@@ -143,6 +143,13 @@ env_vars = [
 ]
 if os.environ.get("GROQ_API_KEY"):
   env_vars.append({"key": "LLM_API_KEY", "value": os.environ["GROQ_API_KEY"]})
+if os.environ.get("E2B_API_KEY"):
+  env_vars.append({"key": "E2B_API_KEY", "value": os.environ["E2B_API_KEY"]})
+if os.environ.get("POLLINATIONS_API_KEY"):
+  env_vars.extend([
+    {"key": "POLLINATIONS_API_KEY", "value": os.environ["POLLINATIONS_API_KEY"]},
+    {"key": "IMAGE_MODEL", "value": "zimage"},
+  ])
 print(json.dumps({
   "type": "web_service",
   "name": service_name,
@@ -184,6 +191,13 @@ items = [
 ]
 if os.environ.get("GROQ_API_KEY"):
   items.append({"key": "LLM_API_KEY", "value": os.environ["GROQ_API_KEY"]})
+if os.environ.get("E2B_API_KEY"):
+  items.append({"key": "E2B_API_KEY", "value": os.environ["E2B_API_KEY"]})
+if os.environ.get("POLLINATIONS_API_KEY"):
+  items.extend([
+    {"key": "POLLINATIONS_API_KEY", "value": os.environ["POLLINATIONS_API_KEY"]},
+    {"key": "IMAGE_MODEL", "value": "zimage"},
+  ])
 print(json.dumps(items))
 PY
 )"

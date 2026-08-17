@@ -22,5 +22,11 @@ services:
         value: "1"
       - key: LLM_API_KEY
         sync: false
+      - key: E2B_API_KEY
+        sync: false
+      - key: POLLINATIONS_API_KEY
+        sync: false
+      - key: IMAGE_MODEL
+        value: zimage
       - key: RATE_LIMIT_PER_MINUTE
         value: "30"
