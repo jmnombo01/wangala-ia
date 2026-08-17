@@ -14,6 +14,10 @@ const FALLBACK_MODELS = (process.env.LLM_FALLBACK_MODELS || 'openai/gpt-oss-120b
   .split(',')
   .map((model) => model.trim())
   .filter(Boolean)
+const SEARCH_FALLBACK_MODELS = (process.env.SEARCH_FALLBACK_MODELS || 'groq/compound')
+  .split(',')
+  .map((model) => model.trim())
+  .filter(Boolean)
 const TAVILY_API_KEY = process.env.TAVILY_API_KEY || ''
 const ALLOWED_ORIGIN = process.env.ALLOWED_ORIGIN || ''
 const MAX_BODY_BYTES = 1_000_000
@@ -160,12 +164,12 @@ function extractContent(message) {
   return ''
 }
 
-async function requestModel(model, messages, tools = []) {
+async function requestModel(model, messages, tools = [], forceBuiltInSearch = false) {
   for (let attempt = 0; attempt <= PROVIDER_RETRIES; attempt += 1) {
     const controller = new AbortController()
     const timeout = setTimeout(() => controller.abort(), 100_000)
     try {
-      const useGroqBuiltInSearch = model === SEARCH_MODEL && model.startsWith('groq/compound')
+      const useGroqBuiltInSearch = forceBuiltInSearch && model.startsWith('groq/compound')
       const payload = {
         model,
         messages,
@@ -280,17 +284,16 @@ async function runWithModel(userMessages, model, useBuiltInSearch = false) {
   const trace = [{ label: 'Demande analysée', detail: 'Contexte et objectif identifiés' }]
 
   if (useBuiltInSearch) {
-    const modelMessage = await requestModel(model, messages)
+    const modelMessage = await requestModel(model, messages, [], true)
     const content = extractContent(modelMessage)
     if (!content) throw new ProviderError('EMPTY_RESPONSE', 502, model)
     const executedTools = Array.isArray(modelMessage.executed_tools) ? modelMessage.executed_tools : []
-    if (executedTools.length) {
-      trace.push({
-        label: 'Recherche web effectuée',
-        detail: `${executedTools.length} outil${executedTools.length > 1 ? 's' : ''} utilisé${executedTools.length > 1 ? 's' : ''}`,
-      })
-    }
-    trace.push({ label: 'Réponse vérifiée', detail: 'Informations récentes intégrées' })
+    if (!executedTools.length) throw new ProviderError('SEARCH_NOT_USED', 502, model)
+    trace.push({
+      label: 'Recherche web effectuée',
+      detail: `${executedTools.length} outil${executedTools.length > 1 ? 's' : ''} utilisé${executedTools.length > 1 ? 's' : ''}`,
+    })
+    trace.push({ label: 'Réponse vérifiée', detail: 'Informations récentes et sources intégrées' })
     return { content, trace }
   }
 
@@ -328,11 +331,16 @@ async function runWithModel(userMessages, model, useBuiltInSearch = false) {
 
 async function runAgent(userMessages) {
   const freshInformation = needsFreshInformation(userMessages)
-  const candidates = [
-    ...(freshInformation && SEARCH_MODEL ? [{ model: SEARCH_MODEL, search: true }] : []),
-    { model: LLM_MODEL, search: false },
-    ...FALLBACK_MODELS.map((model) => ({ model, search: false })),
-  ].filter((candidate, index, all) => candidate.model && all.findIndex((item) => item.model === candidate.model) === index)
+  const candidates = (freshInformation
+    ? [
+        { model: SEARCH_MODEL, search: true },
+        ...SEARCH_FALLBACK_MODELS.map((model) => ({ model, search: true })),
+      ]
+    : [
+        { model: LLM_MODEL, search: false },
+        ...FALLBACK_MODELS.map((model) => ({ model, search: false })),
+      ])
+    .filter((candidate, index, all) => candidate.model && all.findIndex((item) => item.model === candidate.model) === index)
 
   let lastError = null
   for (const candidate of candidates) {
@@ -402,10 +410,11 @@ const server = createServer(async (request, response) => {
     return sendJson(response, 200, {
       status: 'ok',
       service: 'wangala-ia',
-      release: '0.2.0',
+      release: '0.2.1',
       modelConfigured: Boolean(LLM_API_KEY && LLM_MODEL),
       webSearchConfigured: Boolean(LLM_API_KEY && (SEARCH_MODEL || TAVILY_API_KEY)),
       automaticFallbacks: FALLBACK_MODELS.length,
+      searchFallbacks: SEARCH_FALLBACK_MODELS.length,
     }, cors)
   }
 
