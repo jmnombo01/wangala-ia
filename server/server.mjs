@@ -178,7 +178,7 @@ async function requestModel(model, messages, tools = [], forceBuiltInSearch = fa
         ...(tools.length ? { tools, tool_choice: 'auto' } : {}),
         ...(useGroqBuiltInSearch ? {
           compound_custom: {
-            tools: { enabled_tools: ['web_search', 'visit_website'] },
+            tools: { enabled_tools: ['web_search'] },
           },
         } : {}),
       }
@@ -417,7 +417,7 @@ const server = createServer(async (request, response) => {
     return sendJson(response, 200, {
       status: 'ok',
       service: 'wangala-ia',
-      release: '0.2.2',
+      release: '0.2.3',
       modelConfigured: Boolean(LLM_API_KEY && LLM_MODEL),
       webSearchConfigured: Boolean(LLM_API_KEY && (SEARCH_MODEL || TAVILY_API_KEY)),
       automaticFallbacks: FALLBACK_MODELS.length,
