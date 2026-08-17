@@ -194,6 +194,32 @@ function formatFileSize(size: number) {
   return `${Math.ceil(size / 1024)} Ko`
 }
 
+async function extractFileText(file: File): Promise<string> {
+  const extension = file.name.split('.').pop()?.toLowerCase()
+  if (file.type === 'application/pdf' || extension === 'pdf') {
+    const [pdfjsLib, workerModule] = await Promise.all([
+      import('pdfjs-dist'),
+      import('pdfjs-dist/build/pdf.worker.min.mjs?url'),
+    ])
+    pdfjsLib.GlobalWorkerOptions.workerSrc = workerModule.default
+    const document = await pdfjsLib.getDocument({ data: new Uint8Array(await file.arrayBuffer()) }).promise
+    const pages: string[] = []
+    const limit = Math.min(document.numPages, 80)
+    for (let pageNumber = 1; pageNumber <= limit; pageNumber += 1) {
+      const page = await document.getPage(pageNumber)
+      const text = await page.getTextContent()
+      pages.push(text.items.map((item) => 'str' in item ? item.str : '').join(' '))
+    }
+    return pages.join('\n\n').slice(0, 100_000)
+  }
+  if (extension === 'docx' || file.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
+    const mammoth = await import('mammoth')
+    const result = await mammoth.extractRawText({ arrayBuffer: await file.arrayBuffer() })
+    return result.value.slice(0, 100_000)
+  }
+  return (await file.text()).slice(0, 100_000)
+}
+
 function InlineText({ children }: { children: string }) {
   const parts = children.split(/(\*\*[^*]+\*\*|\*[^*]+\*|\[[^\]]+\]\(https?:\/\/[^\s)]+\)|https?:\/\/[^\s]+)/g)
   return (
@@ -368,16 +394,23 @@ function App() {
     const next: Attachment[] = []
 
     for (const file of accepted) {
-      const isText = /\.(txt|md|csv|json)$/i.test(file.name) || file.type.startsWith('text/')
-      if (!isText) {
-        setNotice('Pour cette version, ajoutez un fichier TXT, MD, CSV ou JSON.')
+      const supported = /\.(txt|md|csv|json|pdf|docx)$/i.test(file.name) || file.type.startsWith('text/')
+      if (!supported) {
+        setNotice(`${file.name} n’est pas encore pris en charge. Formats : PDF, DOCX, TXT, MD, CSV et JSON.`)
         continue
       }
-      if (file.size > 300_000) {
-        setNotice(`${file.name} dépasse la limite de 300 Ko.`)
+      if (file.size > 8_000_000) {
+        setNotice(`${file.name} dépasse la limite de 8 Mo.`)
         continue
       }
-      next.push({ name: file.name, size: file.size, content: await file.text() })
+      try {
+        setNotice(`Lecture de ${file.name}…`)
+        const content = await extractFileText(file)
+        if (!content.trim()) throw new Error('empty')
+        next.push({ name: file.name, size: file.size, content })
+      } catch {
+        setNotice(`Impossible de lire ${file.name}. Le document est peut-être protégé ou numérisé sans texte.`)
+      }
     }
 
     setAttachments((current) => [...current, ...next].slice(0, 3))
@@ -758,11 +791,11 @@ function App() {
                   ref={fileInputRef}
                   type="file"
                   multiple
-                  accept=".txt,.md,.csv,.json,text/plain,text/csv,application/json"
+                  accept=".txt,.md,.csv,.json,.pdf,.docx,text/plain,text/csv,application/json,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
                   onChange={(event) => void handleFiles(event)}
                   hidden
                 />
-                <button type="button" onClick={() => fileInputRef.current?.click()} title="Ajouter un fichier texte">
+                <button type="button" onClick={() => fileInputRef.current?.click()} title="Ajouter un PDF, Word ou fichier texte">
                   <LuPaperclip /> <span>Joindre</span>
                 </button>
                 <span className="tool-divider" />

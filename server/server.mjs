@@ -276,7 +276,7 @@ async function fetchRss(url) {
 }
 
 async function webSearch(query) {
-  const normalizedQuery = String(query || '').replace(/\s+/g, ' ').trim().slice(0, 350)
+  const normalizedQuery = String(query || '').replace(/\s+/g, ' ').trim().slice(0, 500)
   if (!normalizedQuery) return { results: [] }
 
   if (TAVILY_API_KEY) {
@@ -301,11 +301,28 @@ async function webSearch(query) {
   }
 
   const datedQuery = `${normalizedQuery} ${currentDate}`
-  let results = await fetchRss(`https://www.bing.com/search?format=rss&setlang=fr&q=${encodeURIComponent(datedQuery)}`)
+  const isHorseRacing = /(quint[ée]|pmu|hippique|chevaux|partants|pronostic)/i.test(normalizedQuery)
+  let results = isHorseRacing
+    ? await fetchRss(`https://news.google.com/rss/search?hl=fr&gl=FR&ceid=FR:fr&q=${encodeURIComponent(normalizedQuery)}`)
+    : await fetchRss(`https://www.bing.com/search?format=rss&setlang=fr&q=${encodeURIComponent(datedQuery)}`)
   if (!results.length) {
-    results = await fetchRss(`https://news.google.com/rss/search?hl=fr&gl=BF&ceid=BF:fr&q=${encodeURIComponent(normalizedQuery)}`)
+    results = await fetchRss(`https://news.google.com/rss/search?hl=fr&gl=FR&ceid=FR:fr&q=${encodeURIComponent(normalizedQuery)}`)
   }
-  return { provider: 'rss', results }
+  return { provider: isHorseRacing ? 'google-news-rss' : 'rss', results }
+}
+
+function buildContextualSearchQuery(userMessages) {
+  const userTurns = userMessages.filter((message) => message.role === 'user').slice(-3).map((message) => message.content)
+  const latest = userTurns.at(-1) || ''
+  const vagueFollowUp = latest.length < 60 && /(fais|fait|lance|continue|oui|recherch|cherche|vas-y)/i.test(latest)
+  let query = vagueFollowUp && userTurns.length > 1 ? userTurns.join(' — ') : latest
+  if (/(quint[ée]|pmu|hippique)/i.test(query)) {
+    const target = new Date()
+    if (/demain/i.test(query)) target.setUTCDate(target.getUTCDate() + 1)
+    const date = new Intl.DateTimeFormat('fr-FR', { dateStyle: 'long', timeZone: 'Africa/Ouagadougou' }).format(target)
+    query = `${query} | Quinté+ ${date} partants course PMU Equidia Paris-Turf pronostic`
+  }
+  return query.slice(0, 500)
 }
 
 function buildSearchContext(search) {
@@ -644,7 +661,7 @@ async function runAgent(userMessages) {
   let searchResultCount = 0
 
   if (freshInformation) {
-    const latestQuestion = [...userMessages].reverse().find((message) => message.role === 'user')?.content || ''
+    const latestQuestion = buildContextualSearchQuery(userMessages)
     const search = await webSearch(latestQuestion)
     searchContext = buildSearchContext(search)
     searchResultCount = search?.results?.length || 0
@@ -724,7 +741,7 @@ const server = createServer(async (request, response) => {
     return sendJson(response, 200, {
       status: 'ok',
       service: 'wangala-ia',
-      release: '0.4.1',
+      release: '0.4.2',
       modelConfigured: Boolean(LLM_API_KEY && LLM_MODEL),
       webSearchConfigured: true,
       searchProvider: TAVILY_API_KEY ? 'tavily' : 'rss',
