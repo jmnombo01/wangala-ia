@@ -134,7 +134,7 @@ import json, os, sys
 owner_id, repo_url, service_name = sys.argv[1:]
 env_vars = [
   {"key": "LLM_API_URL", "value": "https://api.groq.com/openai/v1"},
-  {"key": "LLM_MODEL", "value": "llama-3.3-70b-versatile"},
+  {"key": "LLM_MODEL", "value": "openai/gpt-oss-20b"},
   {"key": "RATE_LIMIT_PER_MINUTE", "value": "20"}
 ]
 if os.environ.get("GROQ_API_KEY"):
@@ -171,7 +171,7 @@ else
 import json, os
 items = [
   {"key": "LLM_API_URL", "value": "https://api.groq.com/openai/v1"},
-  {"key": "LLM_MODEL", "value": "llama-3.3-70b-versatile"},
+  {"key": "LLM_MODEL", "value": "openai/gpt-oss-20b"},
   {"key": "RATE_LIMIT_PER_MINUTE", "value": "20"}
 ]
 if os.environ.get("GROQ_API_KEY"):

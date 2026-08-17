@@ -66,7 +66,7 @@ Consultez **[DEPLOIEMENT-GRATUIT.md](./DEPLOIEMENT-GRATUIT.md)**. La formule gra
 - l’adresse `wangala-ia-bf.onrender.com` (sous réserve de disponibilité) ;
 - un Web Service Render Free ;
 - une clé Groq Free ;
-- le modèle `llama-3.3-70b-versatile`.
+- le modèle `openai/gpt-oss-20b`.
 
 Le fichier `render.yaml` permet à Render de configurer automatiquement le service.
 

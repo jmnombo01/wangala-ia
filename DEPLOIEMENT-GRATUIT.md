@@ -6,7 +6,7 @@
 |---|---|---|
 | Adresse web | Sous-domaine Render | `wangala-ia-bf.onrender.com` si le nom est disponible |
 | Hébergement | Render Free Web Service | Docker, HTTPS et déploiement Git inclus |
-| Modèle IA | Groq Free | `llama-3.3-70b-versatile` via l’API compatible OpenAI |
+| Modèle IA | Groq Free | `openai/gpt-oss-20b` via l’API compatible OpenAI |
 
 Cette solution ne nécessite ni VPS, ni base de données, ni domaine payant. L’historique reste dans le navigateur de chaque utilisateur.
 
@@ -77,7 +77,7 @@ Testez ensuite un message depuis la page principale.
 
 - Render met le service en veille après environ 15 minutes sans visite. La première ouverture suivante peut prendre jusqu’à environ une minute.
 - Render accorde 750 heures gratuites par mois à l’espace de travail ; cela couvre normalement un service unique.
-- Les quotas Groq gratuits varient selon le modèle et le compte. Pour `llama-3.3-70b-versatile`, la limite de référence est de 30 requêtes par minute et 1 000 par jour, mais la limite de jetons peut être atteinte avant.
+- Les quotas Groq gratuits varient selon le modèle et le compte. Pour `openai/gpt-oss-20b`, la limite de référence est de 30 requêtes par minute et 1 000 par jour, mais la limite de jetons peut être atteinte avant.
 - L’adresse `.onrender.com` est gratuite, mais ce n’est pas un véritable domaine `.bf`.
 - Cette formule convient à un prototype et à des essais publics modérés, pas à un service critique.
 

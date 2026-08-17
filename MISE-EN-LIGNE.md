@@ -61,7 +61,7 @@ Les autres réglages sont déjà préparés :
 
 ```text
 LLM_API_URL=https://api.groq.com/openai/v1
-LLM_MODEL=llama-3.3-70b-versatile
+LLM_MODEL=openai/gpt-oss-20b
 RATE_LIMIT_PER_MINUTE=20
 ```
 
