@@ -51,30 +51,6 @@ import {
   sendToAgent,
 } from './lib/chatService'
 
-declare global {
-  interface Window {
-    puter?: { ai: { txt2img: (prompt: string, options?: { model?: string }) => Promise<HTMLImageElement> } }
-  }
-}
-
-let puterLoader: Promise<void> | null = null
-function loadPuter() {
-  if (window.puter) return Promise.resolve()
-  if (puterLoader) return puterLoader
-  puterLoader = new Promise((resolve, reject) => {
-    const script = document.createElement('script')
-    script.src = 'https://js.puter.com/v2/'
-    script.onload = () => resolve()
-    script.onerror = () => reject(new Error('Puter indisponible'))
-    document.head.appendChild(script)
-  })
-  return puterLoader
-}
-
-function isImageGenerationRequest(text: string) {
-  return /(?:g[eé]n[eè]re|cr[eé]e|produis|fabrique).{0,60}\b(?:image|illustration|visuel|photo)\b|\b(?:image|illustration|visuel|photo)\b.{0,60}(?:g[eé]n[eè]re|cr[eé]e|produis)/i.test(text)
-}
-
 type Attachment = {
   name: string
   size: number
@@ -488,25 +464,6 @@ function App() {
     ]
 
     try {
-      if (isImageGenerationRequest(visibleContent)) {
-        await loadPuter()
-        const image = await window.puter!.ai.txt2img(visibleContent, { model: 'google/imagen-4.0-fast' })
-        const artifact: AgentArtifact = {
-          id: crypto.randomUUID(), type: 'image', name: 'Image générée', mimeType: 'image/png',
-          url: image.src, prompt: visibleContent, createdAt: Date.now(),
-        }
-        await persistArtifact(artifact).catch(() => undefined)
-        const assistantMessage: Message = {
-          id: crypto.randomUUID(), role: 'assistant',
-          content: 'Image générée et ajoutée à votre Workspace.', createdAt: Date.now(),
-          trace: [{ label: 'Image générée', detail: 'Puter · Imagen 4 Fast' }], artifacts: [artifact],
-        }
-        setConversations((current) => current.map((item) => item.id === conversationId
-          ? { ...item, messages: [...item.messages, assistantMessage], updatedAt: Date.now() }
-          : item))
-        setWorkspaceOpen(true)
-        return
-      }
       const response = await sendToAgent(apiMessages)
       const generatedArtifacts = response.artifacts ?? []
       void Promise.all(generatedArtifacts.map(persistArtifact)).catch(() => {
