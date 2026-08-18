@@ -11,8 +11,10 @@ export default {
     if (url.pathname === '/analyze') {
       const image = String(body.image || '')
       if (!image.startsWith('data:image/') || image.length > 4_000_000) return new Response('Invalid image', { status: 400 })
-      const result = await env.AI.run('@cf/moondream/moondream3.1-9B-A2B', { task: 'query', image, question: String(body.question || 'Décris précisément cette image en français, lis le texte visible et relève les informations importantes.'), stream: false, reasoning: true, max_tokens: 2048 })
-      return Response.json({ description: result.answer || result.caption || '' })
+      const result = await env.AI.run('@cf/moondream/moondream3.1-9B-A2B', { task: 'query', image, question: String(body.question || 'Décris précisément cette image en français, lis le texte visible et relève les informations importantes.'), stream: false, reasoning: false, max_tokens: 2048 })
+      if (result.answer) return Response.json({ description: result.answer })
+      const caption = await env.AI.run('@cf/moondream/moondream3.1-9B-A2B', { task: 'caption', image, caption_length: 'long', stream: false, max_tokens: 2048 })
+      return Response.json({ description: caption.caption || '' })
     }
     const prompt = String(body.prompt || '').trim().slice(0, 2048)
     if (!prompt) return new Response('Prompt required', { status: 400 })
