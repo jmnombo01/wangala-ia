@@ -5,6 +5,8 @@
   "type": "module",
   "dependencies": {
     "@e2b/code-interpreter": "2.7.1",
-    "@vercel/sandbox": "3.0.0"
+    "@vercel/sandbox": "3.0.0",
+    "mammoth": "^1.12.1",
+    "unpdf": "^1.7.0"
   }
 }

@@ -31,7 +31,7 @@ const CLOUDFLARE_IMAGE_SECRET = process.env.CLOUDFLARE_IMAGE_SECRET || ''
 const CLOUDFLARE_IMAGE_CONFIGURED = Boolean(CLOUDFLARE_IMAGE_URL && CLOUDFLARE_IMAGE_SECRET)
 const IMAGE_MODEL = process.env.IMAGE_MODEL || 'zimage'
 const ALLOWED_ORIGIN = process.env.ALLOWED_ORIGIN || ''
-const MAX_BODY_BYTES = 1_000_000
+const MAX_BODY_BYTES = 12_000_000
 const MAX_CONTEXT_CHARS = Number(process.env.MAX_CONTEXT_CHARS || 14_000)
 const MAX_OUTPUT_TOKENS = Number(process.env.MAX_OUTPUT_TOKENS || 1_200)
 const MAX_REQUESTS_PER_MINUTE = Number(process.env.RATE_LIMIT_PER_MINUTE || 30)
@@ -579,6 +579,28 @@ function imageDimensions(aspectRatio) {
   return dimensions[aspectRatio] || dimensions['1:1']
 }
 
+async function extractDocumentText(dataUrl, name, mimeType) {
+  const match = String(dataUrl || '').match(/^data:[^;]+;base64,(.+)$/)
+  if (!match) throw new Error('INVALID_DOCUMENT')
+  const buffer = Buffer.from(match[1], 'base64')
+  if (buffer.length > 8_000_000) throw new Error('DOCUMENT_TOO_LARGE')
+  const extension = String(name || '').split('.').pop()?.toLowerCase()
+  if (mimeType === 'application/pdf' || extension === 'pdf') {
+    const { extractText } = await import('unpdf')
+    const result = await extractText(new Uint8Array(buffer), { mergePages: true })
+    return String(result.text || '').slice(0, 120_000)
+  }
+  if (extension === 'docx' || mimeType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
+    const mammoth = await import('mammoth')
+    const result = await mammoth.extractRawText({ buffer })
+    return String(result.value || '').slice(0, 120_000)
+  }
+  if (String(mimeType || '').startsWith('text/') || /\.(txt|md|csv|json|html?|xml|ya?ml|js|jsx|ts|tsx|py|sh|sql|log|rtf)$/i.test(name || '')) {
+    return buffer.toString('utf8').slice(0, 120_000)
+  }
+  throw new Error('UNSUPPORTED_DOCUMENT')
+}
+
 async function analyzeAttachedImage(dataUrl, name) {
   if (!CLOUDFLARE_IMAGE_CONFIGURED) throw new Error('VISION_NOT_CONFIGURED')
   const response = await fetch(`${CLOUDFLARE_IMAGE_URL}/analyze`, {
@@ -814,7 +836,7 @@ const server = createServer(async (request, response) => {
     return sendJson(response, 200, {
       status: 'ok',
       service: 'wangala-ia',
-      release: '0.7.0',
+      release: '0.7.1',
       modelConfigured: Boolean(LLM_API_KEY && LLM_MODEL),
       primaryModel: DEEPSEEK_API_KEY ? DEEPSEEK_MODEL : LLM_MODEL,
       deepSeekConfigured: Boolean(DEEPSEEK_API_KEY),
@@ -829,6 +851,18 @@ const server = createServer(async (request, response) => {
       videoGenerationConfigured: false,
       automaticFallbacks: FALLBACK_MODELS.length,
     }, cors)
+  }
+
+  if (url.pathname === '/api/extract-document' && request.method === 'POST') {
+    try {
+      const body = await readJsonBody(request)
+      const text = await extractDocumentText(body.data, String(body.name || 'document'), String(body.mimeType || ''))
+      if (!text.trim()) return sendJson(response, 422, { error: 'Aucun texte détecté. Le document est peut-être scanné.' }, cors)
+      return sendJson(response, 200, { text }, cors)
+    } catch (error) {
+      const message = error?.message === 'DOCUMENT_TOO_LARGE' ? 'Le document dépasse 8 Mo.' : error?.message === 'UNSUPPORTED_DOCUMENT' ? 'Format de document non pris en charge.' : 'Impossible de lire ce document.'
+      return sendJson(response, 400, { error: message }, cors)
+    }
   }
 
   if (url.pathname === '/api/analyze-image' && request.method === 'POST') {

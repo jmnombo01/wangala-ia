@@ -211,6 +211,15 @@ async function prepareImageForAnalysis(file: File): Promise<string> {
   return dataUrl
 }
 
+function fileToDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(String(reader.result))
+    reader.onerror = () => reject(reader.error)
+    reader.readAsDataURL(file)
+  })
+}
+
 async function extractFileText(file: File): Promise<string> {
   const extension = file.name.split('.').pop()?.toLowerCase()
   if (file.type === 'application/pdf' || extension === 'pdf') {
@@ -435,7 +444,13 @@ function App() {
       }
       try {
         setNotice(`Lecture de ${file.name}…`)
-        const content = await extractFileText(file)
+        let content = ''
+        try {
+          const response = await fetch('/api/extract-document', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: file.name, mimeType: file.type, data: await fileToDataUrl(file) }) })
+          const result = await response.json()
+          if (response.ok) content = result.text || ''
+        } catch { /* repli navigateur ci-dessous */ }
+        if (!content) content = await extractFileText(file)
         if (!content.trim()) throw new Error('empty')
         next.push({ name: file.name, size: file.size, content })
       } catch {
