@@ -30,6 +30,8 @@ services:
         value: deepseek-v4-flash
       - key: DEEPSEEK_REASONING_EFFORT
         value: high
+      - key: DEEPSEEK_MAX_TOKENS
+        value: "4096"
       - key: E2B_API_KEY
         sync: false
       - key: VERCEL_TOKEN

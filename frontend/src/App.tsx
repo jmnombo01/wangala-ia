@@ -394,9 +394,9 @@ function App() {
     const next: Attachment[] = []
 
     for (const file of accepted) {
-      const supported = /\.(txt|md|csv|json|pdf|docx)$/i.test(file.name) || file.type.startsWith('text/')
+      const supported = /\.(txt|md|csv|json|pdf|docx|html?|xml|ya?ml|js|jsx|ts|tsx|py|sh|sql|log|rtf)$/i.test(file.name) || file.type.startsWith('text/')
       if (!supported) {
-        setNotice(`${file.name} n’est pas encore pris en charge. Formats : PDF, DOCX, TXT, MD, CSV et JSON.`)
+        setNotice(`${file.name} a bien été sélectionné, mais son contenu binaire n’est pas encore analysable. Formats analysables : PDF, DOCX, texte, code, CSV et JSON.`)
         continue
       }
       if (file.size > 8_000_000) {
@@ -788,12 +788,13 @@ function App() {
             <div className="composer-bottom">
               <div className="composer-tools">
                 <input
+                  id="wangala-file-input"
                   ref={fileInputRef}
                   type="file"
                   multiple
-                  accept=".txt,.md,.csv,.json,.pdf,.docx,text/plain,text/csv,application/json,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                  accept="*/*"
                   onChange={(event) => void handleFiles(event)}
-                  hidden
+                  className="file-input-hidden"
                 />
                 <button type="button" onClick={() => fileInputRef.current?.click()} title="Ajouter un PDF, Word ou fichier texte">
                   <LuPaperclip /> <span>Joindre</span>

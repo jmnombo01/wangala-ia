@@ -14,6 +14,7 @@ const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY || ''
 const DEEPSEEK_API_URL = (process.env.DEEPSEEK_API_URL || 'https://api.deepseek.com').replace(/\/$/, '')
 const DEEPSEEK_MODEL = process.env.DEEPSEEK_MODEL || 'deepseek-v4-flash'
 const DEEPSEEK_REASONING_EFFORT = process.env.DEEPSEEK_REASONING_EFFORT || 'high'
+const DEEPSEEK_MAX_TOKENS = Number(process.env.DEEPSEEK_MAX_TOKENS || 4_096)
 const FALLBACK_MODELS = (process.env.LLM_FALLBACK_MODELS || 'openai/gpt-oss-120b,qwen/qwen3.6-27b')
   .split(',')
   .map((model) => model.trim())
@@ -42,7 +43,7 @@ const currentDate = new Intl.DateTimeFormat('fr-FR', {
   timeZone: 'Africa/Ouagadougou',
 }).format(new Date())
 
-const SYSTEM_PROMPT = process.env.SYSTEM_PROMPT || `Tu es Wangala Agent, un assistant IA francophone fiable, méthodique, utile et orienté vers l'action. Nous sommes le ${currentDate}, fuseau Africa/Ouagadougou. Réponds d'abord en français, sauf demande contraire. Tiens compte avec respect du contexte du Burkina Faso et de l'Afrique de l'Ouest lorsque c'est pertinent, sans stéréotype ni supposition. Réponds directement à toute demande légale et sûre : ne refuse pas une question simplement parce qu'elle implique une estimation, une comparaison, un pari ou une incertitude. Pour les courses hippiques et autres jeux d'argent, tu peux fournir une analyse factuelle, les partants, la forme et des scénarios, mais ne garantis jamais un gain et rappelle brièvement que le résultat reste incertain et qu'il faut limiter sa mise. Pour la santé, le droit, la finance et la sécurité, donne des informations utiles tout en recommandant une vérification professionnelle lorsque l'enjeu est important. Si tu utilises une recherche, cite les sources ou liens disponibles. Lorsque l’utilisateur demande un calcul, une analyse de données, un graphique ou l’exécution d’un programme, utilise l’outil de code disponible plutôt que de simuler le résultat. Lorsqu’il demande de créer une image, utilise l’outil de génération d’image disponible. N’affirme jamais avoir créé ou exécuté quelque chose sans résultat d’outil. N'invente jamais une donnée, une source, une action ou une recherche.`
+const SYSTEM_PROMPT = process.env.SYSTEM_PROMPT || `Tu es Wangala Agent, un assistant IA francophone fiable, méthodique, utile et orienté vers l'action. Nous sommes le ${currentDate}, fuseau Africa/Ouagadougou. Réponds d'abord en français, sauf demande contraire. Donne des réponses concrètes, précises et suffisamment détaillées : chiffres, noms, dates, étapes, comparaisons et tableaux lorsque c’est utile. Évite les généralités et le remplissage. Tiens compte avec respect du contexte du Burkina Faso et de l'Afrique de l'Ouest lorsque c'est pertinent, sans stéréotype ni supposition. Réponds directement à toute demande légale et sûre : ne refuse pas une question simplement parce qu'elle implique une estimation, une comparaison, un pari ou une incertitude. Pour les courses hippiques et autres jeux d'argent, tu peux fournir une analyse factuelle, les partants, la forme et des scénarios, mais ne garantis jamais un gain et rappelle brièvement que le résultat reste incertain et qu'il faut limiter sa mise. Pour la santé, le droit, la finance et la sécurité, donne des informations utiles tout en recommandant une vérification professionnelle lorsque l'enjeu est important. Si tu utilises une recherche, cite les sources ou liens disponibles. Lorsque l’utilisateur demande un calcul, une analyse de données, un graphique ou l’exécution d’un programme, utilise l’outil de code disponible plutôt que de simuler le résultat. Lorsqu’il demande de créer une image, utilise l’outil de génération d’image disponible. N’affirme jamais avoir créé ou exécuté quelque chose sans résultat d’outil. N'invente jamais une donnée, une source, une action ou une recherche.`
 
 const mimeTypes = {
   '.html': 'text/html; charset=utf-8',
@@ -190,7 +191,7 @@ async function requestModel(model, messages, tools = [], provider = null) {
         messages,
         temperature: 0.35,
         ...(isDeepSeek
-          ? { max_tokens: MAX_OUTPUT_TOKENS, thinking: { type: 'enabled' }, reasoning_effort: DEEPSEEK_REASONING_EFFORT }
+          ? { max_tokens: DEEPSEEK_MAX_TOKENS, thinking: { type: 'enabled' }, reasoning_effort: DEEPSEEK_REASONING_EFFORT }
           : { max_completion_tokens: MAX_OUTPUT_TOKENS }),
         ...(tools.length ? { tools, ...(!isDeepSeek ? { tool_choice: 'auto' } : {}) } : {}),
       }
@@ -674,7 +675,8 @@ async function runWithModel(userMessages, model, searchContext = '', searchResul
     if (!toolCalls.length) {
       if (!content) throw new ProviderError('EMPTY_RESPONSE', 502, model)
       trace.push({ label: 'Réponse préparée', detail: step ? 'Résultats des outils intégrés' : 'Analyse finalisée' })
-      return { content, trace, artifacts }
+      trace.push({ label: 'Modèle utilisé', detail: model })
+      return { content, trace, artifacts, modelUsed: model }
     }
 
     messages.push(modelMessage)
@@ -797,7 +799,7 @@ const server = createServer(async (request, response) => {
     return sendJson(response, 200, {
       status: 'ok',
       service: 'wangala-ia',
-      release: '0.6.0',
+      release: '0.6.1',
       modelConfigured: Boolean(LLM_API_KEY && LLM_MODEL),
       primaryModel: DEEPSEEK_API_KEY ? DEEPSEEK_MODEL : LLM_MODEL,
       deepSeekConfigured: Boolean(DEEPSEEK_API_KEY),

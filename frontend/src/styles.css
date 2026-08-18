@@ -2205,3 +2205,12 @@ button.setting-row {
   .workspace-panel { width: 100%; padding: 20px 16px; }
   .workspace-capabilities { flex-wrap: wrap; }
 }
+
+.file-input-hidden {
+  position: fixed !important;
+  width: 1px !important;
+  height: 1px !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+  overflow: hidden !important;
+}
