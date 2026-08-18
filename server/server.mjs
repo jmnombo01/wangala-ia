@@ -169,12 +169,16 @@ function extractRetrySeconds(response, body) {
 }
 
 function extractContent(message) {
-  if (typeof message?.content === 'string') return message.content.trim()
+  if (typeof message?.content === 'string' && message.content.trim()) return message.content.trim()
   if (Array.isArray(message?.content)) {
-    return message.content
+    const content = message.content
       .map((part) => typeof part === 'string' ? part : part?.text || '')
       .join('\n')
       .trim()
+    if (content) return content
+  }
+  if (typeof message?.reasoning_content === 'string' && message.reasoning_content.trim()) {
+    return message.reasoning_content.trim()
   }
   return ''
 }
@@ -799,7 +803,7 @@ const server = createServer(async (request, response) => {
     return sendJson(response, 200, {
       status: 'ok',
       service: 'wangala-ia',
-      release: '0.6.1',
+      release: '0.6.2',
       modelConfigured: Boolean(LLM_API_KEY && LLM_MODEL),
       primaryModel: DEEPSEEK_API_KEY ? DEEPSEEK_MODEL : LLM_MODEL,
       deepSeekConfigured: Boolean(DEEPSEEK_API_KEY),
