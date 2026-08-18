@@ -21,6 +21,9 @@ const VERCEL_TEAM_ID = process.env.VERCEL_TEAM_ID || ''
 const VERCEL_PROJECT_ID = process.env.VERCEL_PROJECT_ID || ''
 const VERCEL_SANDBOX_CONFIGURED = Boolean(VERCEL_TOKEN && VERCEL_TEAM_ID && VERCEL_PROJECT_ID)
 const POLLINATIONS_API_KEY = process.env.POLLINATIONS_API_KEY || ''
+const CLOUDFLARE_IMAGE_URL = (process.env.CLOUDFLARE_IMAGE_URL || '').replace(/\/$/, '')
+const CLOUDFLARE_IMAGE_SECRET = process.env.CLOUDFLARE_IMAGE_SECRET || ''
+const CLOUDFLARE_IMAGE_CONFIGURED = Boolean(CLOUDFLARE_IMAGE_URL && CLOUDFLARE_IMAGE_SECRET)
 const IMAGE_MODEL = process.env.IMAGE_MODEL || 'zimage'
 const ALLOWED_ORIGIN = process.env.ALLOWED_ORIGIN || ''
 const MAX_BODY_BYTES = 1_000_000
@@ -392,7 +395,7 @@ const agentTools = [
       },
     },
   }] : []),
-  ...(POLLINATIONS_API_KEY ? [{
+  ...((CLOUDFLARE_IMAGE_CONFIGURED || POLLINATIONS_API_KEY) ? [{
     type: 'function',
     function: {
       name: 'generate_image',
@@ -564,15 +567,23 @@ function imageDimensions(aspectRatio) {
 }
 
 async function generateWorkspaceImage(args) {
-  if (!POLLINATIONS_API_KEY) return { result: { success: false, error: 'La génération d’images n’est pas configurée.' }, artifacts: [] }
+  if (!CLOUDFLARE_IMAGE_CONFIGURED && !POLLINATIONS_API_KEY) return { result: { success: false, error: 'La génération d’images n’est pas configurée.' }, artifacts: [] }
   const prompt = String(args.prompt || '').trim().slice(0, 2_000)
   if (!prompt) return { result: { success: false, error: 'La description de l’image est vide.' }, artifacts: [] }
   const [width, height] = imageDimensions(args.aspect_ratio)
-  const endpoint = `https://gen.pollinations.ai/image/${encodeURIComponent(prompt)}?model=${encodeURIComponent(IMAGE_MODEL)}&width=${width}&height=${height}&safe=true`
+  const useCloudflare = CLOUDFLARE_IMAGE_CONFIGURED
+  const endpoint = useCloudflare
+    ? `${CLOUDFLARE_IMAGE_URL}/generate`
+    : `https://gen.pollinations.ai/image/${encodeURIComponent(prompt)}?model=${encodeURIComponent(IMAGE_MODEL)}&width=${width}&height=${height}&safe=true`
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), 180_000)
   try {
-    const response = await fetch(endpoint, {
+    const response = await fetch(endpoint, useCloudflare ? {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${CLOUDFLARE_IMAGE_SECRET}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prompt, width, height }),
+      signal: controller.signal,
+    } : {
       headers: { Authorization: `Bearer ${POLLINATIONS_API_KEY}` },
       signal: controller.signal,
     })
@@ -774,13 +785,14 @@ const server = createServer(async (request, response) => {
     return sendJson(response, 200, {
       status: 'ok',
       service: 'wangala-ia',
-      release: '0.4.3',
+      release: '0.5.0',
       modelConfigured: Boolean(LLM_API_KEY && LLM_MODEL),
       webSearchConfigured: true,
       searchProvider: TAVILY_API_KEY ? 'tavily' : 'rss',
       workspaceConfigured: Boolean(E2B_API_KEY || VERCEL_SANDBOX_CONFIGURED),
       workspaceProvider: VERCEL_SANDBOX_CONFIGURED ? 'vercel-linux' : E2B_API_KEY ? 'e2b' : null,
-      imageGenerationConfigured: Boolean(POLLINATIONS_API_KEY),
+      imageGenerationConfigured: Boolean(CLOUDFLARE_IMAGE_CONFIGURED || POLLINATIONS_API_KEY),
+      imageProvider: CLOUDFLARE_IMAGE_CONFIGURED ? 'cloudflare-flux' : POLLINATIONS_API_KEY ? 'pollinations' : null,
       videoGenerationConfigured: false,
       automaticFallbacks: FALLBACK_MODELS.length,
     }, cors)
