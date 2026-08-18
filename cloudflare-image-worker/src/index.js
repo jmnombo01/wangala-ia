@@ -10,7 +10,7 @@ export default {
     try { body = await request.json() } catch { return new Response('Invalid JSON', { status: 400 }) }
     const prompt = String(body.prompt || '').trim().slice(0, 2048)
     if (!prompt) return new Response('Prompt required', { status: 400 })
-    const result = await env.AI.run('@cf/black-forest-labs/flux-1-schnell', { prompt, steps: 4, seed: Math.floor(Math.random() * 2147483647) })
+    const result = await env.AI.run('@cf/black-forest-labs/flux-1-schnell', { prompt, steps: 4 })
     const binary = Uint8Array.from(atob(result.image), c => c.charCodeAt(0))
     return new Response(binary, { headers: { 'Content-Type': 'image/jpeg', 'Cache-Control': 'private, no-store' } })
   }
