@@ -22,6 +22,14 @@ services:
         value: "1"
       - key: LLM_API_KEY
         sync: false
+      - key: DEEPSEEK_API_KEY
+        sync: false
+      - key: DEEPSEEK_API_URL
+        value: https://api.deepseek.com
+      - key: DEEPSEEK_MODEL
+        value: deepseek-v4-flash
+      - key: DEEPSEEK_REASONING_EFFORT
+        value: high
       - key: E2B_API_KEY
         sync: false
       - key: VERCEL_TOKEN

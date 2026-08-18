@@ -10,6 +10,10 @@ const STATIC_DIR = process.env.STATIC_DIR || fileURLToPath(new URL('../frontend/
 const LLM_API_URL = (process.env.LLM_API_URL || 'https://api.openai.com/v1').replace(/\/$/, '')
 const LLM_API_KEY = process.env.LLM_API_KEY || ''
 const LLM_MODEL = process.env.LLM_MODEL || ''
+const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY || ''
+const DEEPSEEK_API_URL = (process.env.DEEPSEEK_API_URL || 'https://api.deepseek.com').replace(/\/$/, '')
+const DEEPSEEK_MODEL = process.env.DEEPSEEK_MODEL || 'deepseek-v4-flash'
+const DEEPSEEK_REASONING_EFFORT = process.env.DEEPSEEK_REASONING_EFFORT || 'high'
 const FALLBACK_MODELS = (process.env.LLM_FALLBACK_MODELS || 'openai/gpt-oss-120b,qwen/qwen3.6-27b')
   .split(',')
   .map((model) => model.trim())
@@ -174,23 +178,27 @@ function extractContent(message) {
   return ''
 }
 
-async function requestModel(model, messages, tools = []) {
+async function requestModel(model, messages, tools = [], provider = null) {
+  const activeProvider = provider || { url: LLM_API_URL, key: LLM_API_KEY, type: 'openai-compatible' }
   for (let attempt = 0; attempt <= PROVIDER_RETRIES; attempt += 1) {
     const controller = new AbortController()
     const timeout = setTimeout(() => controller.abort(), 100_000)
     try {
+      const isDeepSeek = activeProvider.type === 'deepseek'
       const payload = {
         model,
         messages,
         temperature: 0.35,
-        max_completion_tokens: MAX_OUTPUT_TOKENS,
-        ...(tools.length ? { tools, tool_choice: 'auto' } : {}),
+        ...(isDeepSeek
+          ? { max_tokens: MAX_OUTPUT_TOKENS, thinking: { type: 'enabled' }, reasoning_effort: DEEPSEEK_REASONING_EFFORT }
+          : { max_completion_tokens: MAX_OUTPUT_TOKENS }),
+        ...(tools.length ? { tools, ...(!isDeepSeek ? { tool_choice: 'auto' } : {}) } : {}),
       }
-      const response = await fetch(`${LLM_API_URL}/chat/completions`, {
+      const response = await fetch(`${activeProvider.url}/chat/completions`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${LLM_API_KEY}`,
+          'Authorization': `Bearer ${activeProvider.key}`,
         },
         body: JSON.stringify(payload),
         signal: controller.signal,
@@ -639,7 +647,7 @@ async function executeTool(name, args) {
   return { result: { error: `Outil inconnu : ${name}` }, artifacts: [] }
 }
 
-async function runWithModel(userMessages, model, searchContext = '', searchResultCount = 0) {
+async function runWithModel(userMessages, model, searchContext = '', searchResultCount = 0, provider = null) {
   const messages = [
     { role: 'system', content: SYSTEM_PROMPT },
     ...(searchContext ? [{ role: 'system', content: searchContext }] : []),
@@ -659,7 +667,7 @@ async function runWithModel(userMessages, model, searchContext = '', searchResul
     : agentTools
 
   for (let step = 0; step < 3; step += 1) {
-    const modelMessage = await requestModel(model, messages, toolsForTurn)
+    const modelMessage = await requestModel(model, messages, toolsForTurn, provider)
     const toolCalls = Array.isArray(modelMessage.tool_calls) ? modelMessage.tool_calls : []
     const content = extractContent(modelMessage)
 
@@ -714,17 +722,21 @@ async function runAgent(userMessages) {
     }
   }
 
-  const candidates = [LLM_MODEL, ...FALLBACK_MODELS]
-    .filter((model, index, all) => model && all.indexOf(model) === index)
+  const groqProvider = { url: LLM_API_URL, key: LLM_API_KEY, type: 'openai-compatible' }
+  const candidates = [
+    ...(DEEPSEEK_API_KEY ? [{ model: DEEPSEEK_MODEL, provider: { url: DEEPSEEK_API_URL, key: DEEPSEEK_API_KEY, type: 'deepseek' } }] : []),
+    { model: LLM_MODEL, provider: groqProvider },
+    ...FALLBACK_MODELS.map((model) => ({ model, provider: groqProvider })),
+  ].filter((candidate, index, all) => candidate.model && all.findIndex((item) => item.model === candidate.model && item.provider.url === candidate.provider.url) === index)
 
   let lastError = null
-  for (const model of candidates) {
+  for (const candidate of candidates) {
     try {
-      return await runWithModel(userMessages, model, searchContext, searchResultCount)
+      return await runWithModel(userMessages, candidate.model, searchContext, searchResultCount, candidate.provider)
     } catch (error) {
       lastError = error
       if (!(error instanceof ProviderError)) throw error
-      console.warn(`[wangala-api] modèle ${model} indisponible (${error.code}), bascule automatique`)
+      console.warn(`[wangala-api] modèle ${candidate.model} indisponible (${error.code}), bascule automatique`)
     }
   }
   throw lastError || new ProviderError('PROVIDER_ERROR', 502, LLM_MODEL)
@@ -785,8 +797,10 @@ const server = createServer(async (request, response) => {
     return sendJson(response, 200, {
       status: 'ok',
       service: 'wangala-ia',
-      release: '0.5.0',
+      release: '0.6.0',
       modelConfigured: Boolean(LLM_API_KEY && LLM_MODEL),
+      primaryModel: DEEPSEEK_API_KEY ? DEEPSEEK_MODEL : LLM_MODEL,
+      deepSeekConfigured: Boolean(DEEPSEEK_API_KEY),
       webSearchConfigured: true,
       searchProvider: TAVILY_API_KEY ? 'tavily' : 'rss',
       workspaceConfigured: Boolean(E2B_API_KEY || VERCEL_SANDBOX_CONFIGURED),
