@@ -4,8 +4,12 @@ export default {
     if (request.method === 'GET' && url.pathname === '/health') {
       return Response.json({ status: 'ok', service: 'wangala-images', model: 'flux-1-schnell' })
     }
-    if (request.method !== 'POST' || !['/generate', '/analyze'].includes(url.pathname)) return new Response('Not found', { status: 404 })
+    if (request.method !== 'POST' || !['/generate', '/analyze', '/agree'].includes(url.pathname)) return new Response('Not found', { status: 404 })
     if (request.headers.get('authorization') !== `Bearer ${env.WANGALA_IMAGE_SECRET}`) return new Response('Unauthorized', { status: 401 })
+    if (url.pathname === '/agree') {
+      const result = await env.AI.run('@cf/meta/llama-3.2-11b-vision-instruct', { prompt: 'agree' })
+      return Response.json({ accepted: true, result })
+    }
     let body
     try { body = await request.json() } catch { return new Response('Invalid JSON', { status: 400 }) }
     if (url.pathname === '/analyze') {
