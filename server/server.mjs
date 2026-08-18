@@ -579,6 +579,17 @@ function imageDimensions(aspectRatio) {
   return dimensions[aspectRatio] || dimensions['1:1']
 }
 
+async function analyzeAttachedImage(dataUrl, name) {
+  if (!CLOUDFLARE_IMAGE_CONFIGURED) throw new Error('VISION_NOT_CONFIGURED')
+  const response = await fetch(`${CLOUDFLARE_IMAGE_URL}/analyze`, {
+    method: 'POST', headers: { Authorization: `Bearer ${CLOUDFLARE_IMAGE_SECRET}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ image: dataUrl, question: `Analyse précisément l’image ${name || ''} en français. Lis tout texte visible et relève les objets, chiffres, noms et informations utiles.` }),
+  })
+  if (!response.ok) throw new Error('VISION_FAILED')
+  const result = await response.json()
+  return String(result.description || '').slice(0, 12_000)
+}
+
 async function generateWorkspaceImage(args) {
   if (!CLOUDFLARE_IMAGE_CONFIGURED && !POLLINATIONS_API_KEY) return { result: { success: false, error: 'La génération d’images n’est pas configurée.' }, artifacts: [] }
   const prompt = String(args.prompt || '').trim().slice(0, 2_000)
@@ -803,7 +814,7 @@ const server = createServer(async (request, response) => {
     return sendJson(response, 200, {
       status: 'ok',
       service: 'wangala-ia',
-      release: '0.6.2',
+      release: '0.7.0',
       modelConfigured: Boolean(LLM_API_KEY && LLM_MODEL),
       primaryModel: DEEPSEEK_API_KEY ? DEEPSEEK_MODEL : LLM_MODEL,
       deepSeekConfigured: Boolean(DEEPSEEK_API_KEY),
@@ -813,9 +824,23 @@ const server = createServer(async (request, response) => {
       workspaceProvider: VERCEL_SANDBOX_CONFIGURED ? 'vercel-linux' : E2B_API_KEY ? 'e2b' : null,
       imageGenerationConfigured: Boolean(CLOUDFLARE_IMAGE_CONFIGURED || POLLINATIONS_API_KEY),
       imageProvider: CLOUDFLARE_IMAGE_CONFIGURED ? 'cloudflare-flux' : POLLINATIONS_API_KEY ? 'pollinations' : null,
+      visionConfigured: CLOUDFLARE_IMAGE_CONFIGURED,
+      visionProvider: CLOUDFLARE_IMAGE_CONFIGURED ? 'cloudflare-moondream' : null,
       videoGenerationConfigured: false,
       automaticFallbacks: FALLBACK_MODELS.length,
     }, cors)
+  }
+
+  if (url.pathname === '/api/analyze-image' && request.method === 'POST') {
+    try {
+      const body = await readJsonBody(request)
+      const dataUrl = String(body.image || '')
+      if (!dataUrl.startsWith('data:image/') || dataUrl.length > 950_000) return sendJson(response, 400, { error: 'Image invalide ou trop volumineuse.' }, cors)
+      const description = await analyzeAttachedImage(dataUrl, String(body.name || 'image'))
+      return sendJson(response, 200, { description }, cors)
+    } catch {
+      return sendJson(response, 502, { error: 'L’analyse visuelle a échoué. Réessayez avec une image plus petite.' }, cors)
+    }
   }
 
   if (url.pathname === '/api/chat' && request.method === 'POST') {

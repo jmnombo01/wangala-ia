@@ -194,6 +194,23 @@ function formatFileSize(size: number) {
   return `${Math.ceil(size / 1024)} Ko`
 }
 
+async function prepareImageForAnalysis(file: File): Promise<string> {
+  const source = await createImageBitmap(file)
+  const scale = Math.min(1, 1200 / Math.max(source.width, source.height))
+  const canvas = document.createElement('canvas')
+  canvas.width = Math.max(1, Math.round(source.width * scale))
+  canvas.height = Math.max(1, Math.round(source.height * scale))
+  canvas.getContext('2d')!.drawImage(source, 0, 0, canvas.width, canvas.height)
+  source.close()
+  let quality = 0.78
+  let dataUrl = canvas.toDataURL('image/jpeg', quality)
+  while (dataUrl.length > 900_000 && quality > 0.35) {
+    quality -= 0.1
+    dataUrl = canvas.toDataURL('image/jpeg', quality)
+  }
+  return dataUrl
+}
+
 async function extractFileText(file: File): Promise<string> {
   const extension = file.name.split('.').pop()?.toLowerCase()
   if (file.type === 'application/pdf' || extension === 'pdf') {
@@ -394,6 +411,19 @@ function App() {
     const next: Attachment[] = []
 
     for (const file of accepted) {
+      if (file.type.startsWith('image/') || /\.(jpe?g|png|webp)$/i.test(file.name)) {
+        try {
+          setNotice(`Analyse visuelle de ${file.name}…`)
+          const image = await prepareImageForAnalysis(file)
+          const response = await fetch('/api/analyze-image', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: file.name, image }) })
+          const result = await response.json()
+          if (!response.ok || !result.description) throw new Error('vision')
+          next.push({ name: file.name, size: file.size, content: `[Analyse visuelle de ${file.name}]\n${result.description}` })
+        } catch {
+          setNotice(`Impossible d’analyser ${file.name}. Essayez une image JPG ou PNG plus petite.`)
+        }
+        continue
+      }
       const supported = /\.(txt|md|csv|json|pdf|docx|html?|xml|ya?ml|js|jsx|ts|tsx|py|sh|sql|log|rtf)$/i.test(file.name) || file.type.startsWith('text/')
       if (!supported) {
         setNotice(`${file.name} a bien été sélectionné, mais son contenu binaire n’est pas encore analysable. Formats analysables : PDF, DOCX, texte, code, CSV et JSON.`)
